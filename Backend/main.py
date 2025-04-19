@@ -5,8 +5,31 @@ from dotenv import load_dotenv
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
 from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import openai, silero
+from livekit.agents import transcription  # Add transcription module
+from livekit.agents import stt  # Add STT module
 
 load_dotenv()
+
+# Create a custom Assistant class with transcription handling
+class TranscriptionAssistant(VoiceAssistant):
+    """VoiceAssistant with real-time transcription logging capability."""
+    
+    async def transcription_node(self, text, model_settings):
+        """Override transcription node to log transcriptions to terminal."""
+        async for delta in super().transcription_node(text, model_settings):
+            # Print the transcription delta to terminal
+            print(f"TRANSCRIPTION: {delta}", end="", flush=True)
+            yield delta
+
+# Function to forward transcriptions to terminal
+async def _forward_transcription(stt_stream, stt_forwarder):
+    """Forward transcriptions and log them to the console."""
+    async for ev in stt_stream:
+        stt_forwarder.update(ev)
+        if ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
+            print(f"USER TRANSCRIPT (interim): {ev.alternatives[0].text}", end="", flush=True)
+        elif ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+            print(f"\nUSER TRANSCRIPT (final): {ev.alternatives[0].text}")
 
 async def create_landingpage_assistant(ctx: JobContext):
     initial_ctx = llm.ChatContext().append(
@@ -34,7 +57,8 @@ async def create_landingpage_assistant(ctx: JobContext):
     )
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
-    assistant = VoiceAssistant(
+    # Use TranscriptionAssistant instead of VoiceAssistant
+    assistant = TranscriptionAssistant(
         vad=silero.VAD.load(),
         stt=openai.STT(),
         llm=openai.LLM(),
@@ -79,7 +103,8 @@ async def create_onboarding_assistant(ctx: JobContext):
     )
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
-    assistant = VoiceAssistant(
+    # Use TranscriptionAssistant instead of VoiceAssistant
+    assistant = TranscriptionAssistant(
         vad=silero.VAD.load(),
         stt=openai.STT(),
         llm=openai.LLM(),
@@ -93,9 +118,54 @@ async def create_onboarding_assistant(ctx: JobContext):
     "My job is to ask you some questions to understand exactly what you need so we can build the perfect assistant for you. "
     "To kick things off, could you tell me: What will be the main purpose or primary goal of the voice agent you want to create?", allow_interruptions=True)
 
+# Add a function to handle direct transcriptions from audio tracks
+async def process_audio_tracks_with_transcription(ctx: JobContext):
+    """Set up direct transcription forwarding from audio tracks."""
+    stt_instance = openai.STT()
+    tasks = []
+
+    async def transcribe_track(participant, track):
+        """Process a single audio track for transcription."""
+        audio_stream = ctx.room.create_audio_stream(track)
+        stt_forwarder = transcription.STTSegmentsForwarder(
+            room=ctx.room, participant=participant, track=track
+        )
+        stt_stream = stt_instance.stream()
+        
+        # Create task to process transcriptions
+        forward_task = asyncio.create_task(
+            _forward_transcription(stt_stream, stt_forwarder)
+        )
+        tasks.append(forward_task)
+        
+        # Process audio frames
+        async for event in audio_stream:
+            stt_stream.push_frame(event.frame)
+
+    # Handle new audio tracks
+    @ctx.room.on("track_subscribed")
+    def on_track_subscribed(track, publication, participant):
+        if track.kind == "audio":
+            print(f"New audio track from {participant.identity}, setting up transcription")
+            tasks.append(asyncio.create_task(transcribe_track(participant, track)))
+
+    # Keep the function running
+    try:
+        await asyncio.Future()
+    finally:
+        # Clean up tasks when done
+        for task in tasks:
+            task.cancel()
+
 async def entrypoint(ctx: JobContext):
     # Get the assistant version from the room name
     room_name = ctx.room.name if ctx.room and ctx.room.name else ""
+    
+    # For direct transcription without using an assistant
+    if "transcribe" in room_name.lower():
+        await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+        await process_audio_tracks_with_transcription(ctx)
+        return
     
     # Check for specific identifiers in the room name
     if "onboarding" in room_name.lower():
