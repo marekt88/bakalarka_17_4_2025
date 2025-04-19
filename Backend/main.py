@@ -44,7 +44,7 @@ async def create_landingpage_assistant(ctx: JobContext):
     assistant.start(ctx.room)
 
     await asyncio.sleep(1)
-    await assistant.say("Hello, I'm Alice. How may I help you today?", allow_interruptions=True)
+    await assistant.say("Hello, I'm Dashboard. Welcome to VoiceForge AI! How may I help you today?", allow_interruptions=True)
 
 async def create_onboarding_assistant(ctx: JobContext):
     initial_ctx = llm.ChatContext().append(
@@ -97,9 +97,13 @@ async def entrypoint(ctx: JobContext):
     # Get the assistant version from the room name
     room_name = ctx.room.name if ctx.room and ctx.room.name else ""
     
-    if "v3" in room_name.lower():
+    # Check for specific identifiers in the room name
+    if "onboarding" in room_name.lower():
         await create_onboarding_assistant(ctx)
+    elif "landing" in room_name.lower():
+        await create_landingpage_assistant(ctx)
     else:
+        # Default to landing page assistant if no specific identifier
         await create_landingpage_assistant(ctx)
 
 if __name__ == "__main__":

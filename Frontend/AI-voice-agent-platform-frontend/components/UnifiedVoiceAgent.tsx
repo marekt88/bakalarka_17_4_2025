@@ -20,7 +20,7 @@ interface ConnectionDetails {
 interface UnifiedVoiceAgentProps {
   assistantName?: string;
   className?: string;
-  assistantType?: "landing" | "onboarding"; // Add this parameter
+  assistantType?: "landing" | "onboarding"; // Define the assistant type prop
 }
 
 export function UnifiedVoiceAgent({ 

@@ -30,11 +30,12 @@ export async function GET(request: Request) {
 
     // Get the URL to parse search params
     const url = new URL(request.url);
-    const assistantType = url.searchParams.get('assistant') || 'default';
     
     // Generate participant token with a prefix based on the assistant type
     const participantIdentity = `user_${Math.floor(Math.random() * 10_000)}`;
-    const roomName = `${assistantType}_room_${Math.floor(Math.random() * 10_000)}`;
+    const assistantName = url.searchParams.get('assistant') || 'default';
+    const assistantPurpose = url.searchParams.get('type') || 'landing'; // Get purpose (landing/onboarding)
+    const roomName = `${assistantName}_${assistantPurpose}_room_${Math.floor(Math.random() * 10_000)}`;
     const participantToken = await createParticipantToken(
       { identity: participantIdentity },
       roomName

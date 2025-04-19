@@ -53,8 +53,12 @@ export default function AnswerQuestionsPage() {
             </p>
           </div>
 
-          {/* New Unified Voice Agent Component */}
-          <UnifiedVoiceAgent assistantName="ALICE" className="max-w-2xl mx-auto" />
+          {/* Unified Voice Agent Component with explicit assistant type */}
+          <UnifiedVoiceAgent 
+            assistantName="ALICE" 
+            className="max-w-2xl mx-auto" 
+            assistantType="onboarding"
+          />
 
           <div className="flex justify-end">
             <Button 
