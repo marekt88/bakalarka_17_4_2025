@@ -1,5 +1,8 @@
 import asyncio
 import os
+import time
+import datetime
+from pathlib import Path
 
 from dotenv import load_dotenv
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
@@ -10,26 +13,139 @@ from livekit.agents import stt  # Add STT module
 
 load_dotenv()
 
-# Create a custom Assistant class with transcription handling
+# Create a custom Assistant class with transcription handling and storage
 class TranscriptionAssistant(VoiceAssistant):
     """VoiceAssistant with real-time transcription logging capability."""
     
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.transcription_history = []
+        self.user_transcript_history = []
+        self.start_time = datetime.datetime.now()
+        self.room_id = None
+        
+        # Set up event handlers for transcript capture
+        self.on("user_speech_committed", self._handle_user_transcript)
+        self.on("agent_speech_committed", self._handle_agent_transcript)
+    
+    def set_room_id(self, room_id):
+        """Set room ID for transcript filename."""
+        self.room_id = room_id
+    
+    def _handle_user_transcript(self, transcript_data):
+        """Handle user transcript events."""
+        try:
+            # Extract transcript from the ChatMessage object
+            if hasattr(transcript_data, "user_transcript"):
+                transcript = transcript_data.user_transcript
+            else:
+                # Try to extract from dictionary-like structure if available
+                transcript = str(transcript_data)
+                
+            if transcript:
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self.user_transcript_history.append({
+                    "timestamp": timestamp,
+                    "speaker": "USER",
+                    "text": transcript
+                })
+                print(f"\nUSER TRANSCRIPT SAVED: {transcript}")
+        except Exception as e:
+            print(f"Error handling user transcript: {e}")
+    
+    def _handle_agent_transcript(self, transcript_data):
+        """Handle agent transcript events."""
+        try:
+            # Extract transcript from the ChatMessage object
+            if hasattr(transcript_data, "agent_transcript"):
+                transcript = transcript_data.agent_transcript
+            else:
+                # Try to extract from dictionary-like structure if available
+                transcript = str(transcript_data)
+                
+            if transcript:
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self.transcription_history.append({
+                    "timestamp": timestamp,
+                    "speaker": "ASSISTANT",
+                    "text": transcript
+                })
+                print(f"\nASSISTANT TRANSCRIPT SAVED: {transcript}")
+        except Exception as e:
+            print(f"Error handling agent transcript: {e}")
+
     async def transcription_node(self, text, model_settings):
         """Override transcription node to log transcriptions to terminal."""
         async for delta in super().transcription_node(text, model_settings):
             # Print the transcription delta to terminal
             print(f"TRANSCRIPTION: {delta}", end="", flush=True)
             yield delta
+    
+    def save_transcript_to_file(self):
+        """Save the complete transcript to a markdown file."""
+        try:
+            if not self.room_id:
+                self.room_id = f"unknown_room_{int(time.time())}"
+                
+            # Create transcripts directory if it doesn't exist
+            # Use absolute path to ensure we know exactly where it's saved
+            transcript_root = Path(os.path.dirname(os.path.abspath(__file__)))
+            transcripts_dir = transcript_root / "transcripts"
+            transcripts_dir.mkdir(exist_ok=True)
+            
+            # Create filename with room ID and timestamp
+            filename = transcripts_dir / f"{self.room_id}_transcript.md"
+            
+            # Merge and sort user and assistant transcripts by timestamp
+            all_transcripts = self.transcription_history + self.user_transcript_history
+            all_transcripts.sort(key=lambda x: x["timestamp"])
+            
+            # Create markdown content
+            content = f"# Conversation Transcript - {self.room_id}\n\n"
+            content += f"*Session started at {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}*\n\n"
+            
+            for entry in all_transcripts:
+                content += f"### {entry['speaker']} - {entry['timestamp']}\n\n"
+                content += f"{entry['text']}\n\n"
+            
+            content += f"*Session ended at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*\n"
+            
+            # Write to file
+            with open(filename, "w", encoding="utf-8") as f:
+                f.write(content)
+            
+            abs_path = os.path.abspath(filename)
+            print(f"Transcript saved to: {abs_path}")
+            return abs_path
+        except Exception as e:
+            print(f"Error saving transcript to file: {e}")
+            return None
 
 # Function to forward transcriptions to terminal
-async def _forward_transcription(stt_stream, stt_forwarder):
+async def _forward_transcription(stt_stream, stt_forwarder, transcript_history=None):
     """Forward transcriptions and log them to the console."""
+    current_transcript = ""
+    
     async for ev in stt_stream:
         stt_forwarder.update(ev)
         if ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
             print(f"USER TRANSCRIPT (interim): {ev.alternatives[0].text}", end="", flush=True)
+            current_transcript = ev.alternatives[0].text
         elif ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
-            print(f"\nUSER TRANSCRIPT (final): {ev.alternatives[0].text}")
+            final_text = ev.alternatives[0].text
+            print(f"\nUSER TRANSCRIPT (final): {final_text}")
+            current_transcript = final_text
+            
+            # Store the transcript if history is provided
+            if transcript_history is not None:
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                transcript_history.append({
+                    "timestamp": timestamp,
+                    "speaker": "USER",
+                    "text": final_text
+                })
+    
+    return current_transcript
 
 async def create_landingpage_assistant(ctx: JobContext):
     initial_ctx = llm.ChatContext().append(
@@ -65,6 +181,44 @@ async def create_landingpage_assistant(ctx: JobContext):
         tts=openai.TTS(voice="alloy"),  # Using a more formal voice
         chat_ctx=initial_ctx
     )
+    
+    # Set room ID for transcript filename
+    if ctx.room and ctx.room.name:
+        assistant.set_room_id(ctx.room.name)
+    
+    # Register cleanup handlers to explicitly save transcript before disconnect
+    @ctx.room.on("disconnected")
+    def on_disconnected():
+        print("Room disconnected, saving transcript...")
+        # Force the transcript to be saved
+        file_path = assistant.save_transcript_to_file()
+        print(f"Transcript saved to: {file_path}")
+    
+    # Also register for participant disconnections to catch client leaving
+    @ctx.room.on("participant_disconnected")
+    def on_participant_disconnected(participant):
+        print(f"Participant {participant.identity} disconnected, saving transcript...")
+        file_path = assistant.save_transcript_to_file()
+        print(f"Transcript saved to: {file_path}")
+    
+    # Monitor server shutdowns as well - use proper connection state checking
+    @ctx.room.on("connection_state_changed")
+    def on_connection_state_changed(state):
+        # Check if state is int or enum
+        try:
+            if isinstance(state, int) and state == 0:  # Assuming 0 means disconnected
+                print("Connection state changed to DISCONNECTED (int value), saving transcript...")
+                file_path = assistant.save_transcript_to_file()
+                print(f"Transcript saved to: {file_path}")
+            elif hasattr(state, 'name') and state.name == "DISCONNECTED":
+                print("Connection state changed to DISCONNECTED (enum), saving transcript...")
+                file_path = assistant.save_transcript_to_file()
+                print(f"Transcript saved to: {file_path}")
+        except Exception as e:
+            print(f"Error in connection_state_changed handler: {e}")
+            # Try to save transcript anyway
+            assistant.save_transcript_to_file()
+    
     assistant.start(ctx.room)
 
     await asyncio.sleep(1)
@@ -111,6 +265,44 @@ async def create_onboarding_assistant(ctx: JobContext):
         tts=openai.TTS(voice="nova"),  # Using a warmer, more casual voice
         chat_ctx=initial_ctx
     )
+    
+    # Set room ID for transcript filename
+    if ctx.room and ctx.room.name:
+        assistant.set_room_id(ctx.room.name)
+    
+    # Register cleanup handlers to explicitly save transcript before disconnect
+    @ctx.room.on("disconnected")
+    def on_disconnected():
+        print("Room disconnected, saving transcript...")
+        # Force the transcript to be saved
+        file_path = assistant.save_transcript_to_file()
+        print(f"Transcript saved to: {file_path}")
+    
+    # Also register for participant disconnections to catch client leaving
+    @ctx.room.on("participant_disconnected")
+    def on_participant_disconnected(participant):
+        print(f"Participant {participant.identity} disconnected, saving transcript...")
+        file_path = assistant.save_transcript_to_file()
+        print(f"Transcript saved to: {file_path}")
+    
+    # Monitor server shutdowns as well - use proper connection state checking
+    @ctx.room.on("connection_state_changed")
+    def on_connection_state_changed(state):
+        # Check if state is int or enum
+        try:
+            if isinstance(state, int) and state == 0:  # Assuming 0 means disconnected
+                print("Connection state changed to DISCONNECTED (int value), saving transcript...")
+                file_path = assistant.save_transcript_to_file()
+                print(f"Transcript saved to: {file_path}")
+            elif hasattr(state, 'name') and state.name == "DISCONNECTED":
+                print("Connection state changed to DISCONNECTED (enum), saving transcript...")
+                file_path = assistant.save_transcript_to_file()
+                print(f"Transcript saved to: {file_path}")
+        except Exception as e:
+            print(f"Error in connection_state_changed handler: {e}")
+            # Try to save transcript anyway
+            assistant.save_transcript_to_file()
+    
     assistant.start(ctx.room)
 
     await asyncio.sleep(1)
@@ -123,6 +315,9 @@ async def process_audio_tracks_with_transcription(ctx: JobContext):
     """Set up direct transcription forwarding from audio tracks."""
     stt_instance = openai.STT()
     tasks = []
+    transcript_history = []
+    start_time = datetime.datetime.now()
+    room_id = ctx.room.name if ctx.room and ctx.room.name else f"unknown_room_{int(time.time())}"
 
     async def transcribe_track(participant, track):
         """Process a single audio track for transcription."""
@@ -134,7 +329,7 @@ async def process_audio_tracks_with_transcription(ctx: JobContext):
         
         # Create task to process transcriptions
         forward_task = asyncio.create_task(
-            _forward_transcription(stt_stream, stt_forwarder)
+            _forward_transcription(stt_stream, stt_forwarder, transcript_history)
         )
         tasks.append(forward_task)
         
@@ -148,6 +343,23 @@ async def process_audio_tracks_with_transcription(ctx: JobContext):
         if track.kind == "audio":
             print(f"New audio track from {participant.identity}, setting up transcription")
             tasks.append(asyncio.create_task(transcribe_track(participant, track)))
+    
+    # Register multiple event handlers for reliable cleanup
+    @ctx.room.on("disconnected")
+    def on_disconnected():
+        print("Room disconnected, saving transcript...")
+        save_standalone_transcript(room_id, transcript_history, start_time)
+    
+    @ctx.room.on("participant_disconnected")
+    def on_participant_disconnected(participant):
+        print(f"Participant {participant.identity} disconnected, saving transcript...")
+        save_standalone_transcript(room_id, transcript_history, start_time)
+    
+    @ctx.room.on("connection_state_changed")
+    def on_connection_state_changed(state):
+        if state.name == "DISCONNECTED":
+            print("Connection state changed to DISCONNECTED, saving transcript...")
+            save_standalone_transcript(room_id, transcript_history, start_time)
 
     # Keep the function running
     try:
@@ -156,6 +368,45 @@ async def process_audio_tracks_with_transcription(ctx: JobContext):
         # Clean up tasks when done
         for task in tasks:
             task.cancel()
+        
+        # Save transcript on exit if not already saved
+        save_standalone_transcript(room_id, transcript_history, start_time)
+
+def save_standalone_transcript(room_id, transcript_history, start_time):
+    """Save transcript to file for standalone transcription mode."""
+    try:
+        # Create transcripts directory if it doesn't exist
+        # Use absolute path to ensure we know exactly where it's saved
+        transcript_root = Path(os.path.dirname(os.path.abspath(__file__)))
+        transcripts_dir = transcript_root / "transcripts"
+        transcripts_dir.mkdir(exist_ok=True)
+        
+        # Create filename with room ID and timestamp
+        filename = transcripts_dir / f"{room_id}_transcript.md"
+        
+        # Sort transcripts by timestamp
+        transcript_history.sort(key=lambda x: x["timestamp"])
+        
+        # Create markdown content
+        content = f"# Transcription - {room_id}\n\n"
+        content += f"*Session started at {start_time.strftime('%Y-%m-%d %H:%M:%S')}*\n\n"
+        
+        for entry in transcript_history:
+            content += f"### {entry['speaker']} - {entry['timestamp']}\n\n"
+            content += f"{entry['text']}\n\n"
+        
+        content += f"*Session ended at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*\n"
+        
+        # Write to file
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(content)
+        
+        abs_path = os.path.abspath(filename)
+        print(f"Transcript saved to: {abs_path}")
+        return abs_path
+    except Exception as e:
+        print(f"Error saving standalone transcript: {e}")
+        return None
 
 async def entrypoint(ctx: JobContext):
     # Get the assistant version from the room name
@@ -177,4 +428,10 @@ async def entrypoint(ctx: JobContext):
         await create_landingpage_assistant(ctx)
 
 if __name__ == "__main__":
+    # Create transcripts directory at startup to ensure it exists
+    transcript_root = Path(os.path.dirname(os.path.abspath(__file__)))
+    transcripts_dir = transcript_root / "transcripts"
+    transcripts_dir.mkdir(exist_ok=True)
+    print(f"Transcript directory initialized at: {os.path.abspath(transcripts_dir)}")
+    
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
