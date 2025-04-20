@@ -3,6 +3,7 @@ import os
 import time
 import datetime
 from pathlib import Path
+import json  # Add json for debugging
 
 from dotenv import load_dotenv
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
@@ -23,10 +24,18 @@ class TranscriptionAssistant(VoiceAssistant):
         self.user_transcript_history = []
         self.start_time = datetime.datetime.now()
         self.room_id = None
+        self.interrupted_messages = {}  # Track interrupted messages
         
         # Set up event handlers for transcript capture
         self.on("user_speech_committed", self._handle_user_transcript)
         self.on("agent_speech_committed", self._handle_agent_transcript)
+        
+        # Special handlers to capture interrupted speech
+        self.on("agent_speech_interrupted", self._handle_agent_speech_interrupted)
+        
+        # Add direct debug hooks to monitor events - fixing the lambda to accept any arguments
+        self.on("agent_started_speaking", lambda *args: print(f"\nDEBUG - Agent started speaking"))
+        self.on("agent_stopped_speaking", lambda *args: print(f"\nDEBUG - Agent stopped speaking"))
     
     def set_room_id(self, room_id):
         """Set room ID for transcript filename."""
@@ -38,6 +47,8 @@ class TranscriptionAssistant(VoiceAssistant):
             # Extract transcript from the ChatMessage object
             if hasattr(transcript_data, "user_transcript"):
                 transcript = transcript_data.user_transcript
+            elif hasattr(transcript_data, "content"):
+                transcript = transcript_data.content
             else:
                 # Try to extract from dictionary-like structure if available
                 transcript = str(transcript_data)
@@ -57,22 +68,99 @@ class TranscriptionAssistant(VoiceAssistant):
         """Handle agent transcript events."""
         try:
             # Extract transcript from the ChatMessage object
+            transcript = None
+            
             if hasattr(transcript_data, "agent_transcript"):
                 transcript = transcript_data.agent_transcript
+            elif hasattr(transcript_data, "content"):
+                transcript = transcript_data.content
             else:
                 # Try to extract from dictionary-like structure if available
                 transcript = str(transcript_data)
+            
+            # If speech was previously interrupted, try to update with final version
+            if hasattr(transcript_data, "speech_id"):
+                speech_id = transcript_data.speech_id
+                if speech_id in self.interrupted_messages:
+                    # An interrupted message was finalized - remove from tracking
+                    del self.interrupted_messages[speech_id]
                 
             if transcript:
                 timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                self.transcription_history.append({
-                    "timestamp": timestamp,
-                    "speaker": "ASSISTANT",
-                    "text": transcript
-                })
-                print(f"\nASSISTANT TRANSCRIPT SAVED: {transcript}")
+                
+                # Check if transcript already exists to avoid duplicates
+                existing = False
+                for entry in self.transcription_history:
+                    if entry["text"] == transcript:
+                        existing = True
+                        break
+                
+                if not existing:
+                    self.transcription_history.append({
+                        "timestamp": timestamp,
+                        "speaker": "ASSISTANT",
+                        "text": transcript
+                    })
+                    print(f"\nASSISTANT TRANSCRIPT SAVED: {transcript}")
         except Exception as e:
             print(f"Error handling agent transcript: {e}")
+    
+    def _handle_agent_speech_interrupted(self, data):
+        """Handle interrupted agent speech to ensure it's captured."""
+        try:
+            print(f"\nDEBUG - Agent speech interrupted: {data}")
+            
+            # Try to extract speech_id and text
+            speech_id = None
+            transcript = None
+            
+            if hasattr(data, "speech_id"):
+                speech_id = data.speech_id
+            
+            if hasattr(data, "agent_transcript"):
+                transcript = data.agent_transcript
+            elif hasattr(data, "content"):
+                transcript = data.content
+            elif hasattr(data, "text"):
+                transcript = data.text
+            else:
+                # Try to extract from ChatMessage
+                try:
+                    content_str = str(data)
+                    if "content=" in content_str:
+                        import re
+                        match = re.search(r'content="([^"]*)"', content_str)
+                        if match:
+                            transcript = match.group(1)
+                except:
+                    transcript = str(data)
+            
+            if transcript:
+                # Store interrupted speech in our tracking dictionary
+                if speech_id:
+                    self.interrupted_messages[speech_id] = transcript
+                
+                # Also add to transcript history
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
+                # Check if transcript already exists to avoid duplicates
+                existing = False
+                for entry in self.transcription_history:
+                    if entry["text"] == transcript:
+                        existing = True
+                        break
+                
+                if not existing:
+                    self.transcription_history.append({
+                        "timestamp": timestamp,
+                        "speaker": "ASSISTANT",
+                        "text": f"{transcript} [interrupted]"
+                    })
+                    print(f"\nASSISTANT INTERRUPTED SPEECH SAVED: {transcript}")
+        except Exception as e:
+            print(f"Error handling interrupted agent speech: {e}")
+            import traceback
+            traceback.print_exc()
 
     async def transcription_node(self, text, model_settings):
         """Override transcription node to log transcriptions to terminal."""
@@ -80,6 +168,12 @@ class TranscriptionAssistant(VoiceAssistant):
             # Print the transcription delta to terminal
             print(f"TRANSCRIPTION: {delta}", end="", flush=True)
             yield delta
+    
+    # Override pipeline agent methods to directly capture committed speech
+    async def _main_task(self):
+        """Override _main_task to add committed speech tracking."""
+        # Call the parent method using super()
+        return await super()._main_task()
     
     def save_transcript_to_file(self):
         """Save the complete transcript to a markdown file."""
@@ -96,15 +190,71 @@ class TranscriptionAssistant(VoiceAssistant):
             # Create filename with room ID and timestamp
             filename = transcripts_dir / f"{self.room_id}_transcript.md"
             
-            # Merge and sort user and assistant transcripts by timestamp
-            all_transcripts = self.transcription_history + self.user_transcript_history
-            all_transcripts.sort(key=lambda x: x["timestamp"])
+            # Direct logging of what we're about to process
+            print(f"\nDEBUG - TRANSCRIPT DATA BEFORE PROCESSING:")
+            print(f"Assistant transcripts: {len(self.transcription_history)}")
+            print(f"User transcripts: {len(self.user_transcript_history)}")
+            
+            # Check for any committed speech in the debug logs
+            committed_pattern = '"agent_transcript":'
+            
+            # Clean up content in transcripts to ensure proper formatting
+            cleaned_transcripts = []
+            
+            # Process assistant transcripts
+            for entry in self.transcription_history:
+                # Clean up the text by removing any control characters or strange formatting
+                text = entry["text"]
+                if isinstance(text, str):
+                    # Remove any potential overlapping text from garbled output
+                    text = text.split("tool_calls=None, tool_call_id=None, tool_exception=None")[0]
+                    if "role='assistant'" in text:
+                        # Extract the content value if this is a raw ChatMessage representation
+                        try:
+                            import re
+                            content_match = re.search(r'content="([^"]*)"', text)
+                            if content_match:
+                                text = content_match.group(1)
+                        except Exception:
+                            pass  # Keep original text if regex fails
+                
+                cleaned_transcripts.append({
+                    "timestamp": entry["timestamp"],
+                    "speaker": entry["speaker"],
+                    "text": text
+                })
+                
+            # Process user transcripts
+            for entry in self.user_transcript_history:
+                # Clean up the text by removing any control characters or strange formatting
+                text = entry["text"]
+                if isinstance(text, str):
+                    # Remove any potential overlapping text from garbled output
+                    text = text.split("tool_calls=None, tool_call_id=None, tool_exception=None")[0]
+                    if "role='user'" in text:
+                        # Extract the content value if this is a raw ChatMessage representation
+                        try:
+                            import re
+                            content_match = re.search(r'content=\'([^\']*)\'', text)
+                            if content_match:
+                                text = content_match.group(1)
+                        except Exception:
+                            pass  # Keep original text if regex fails
+                
+                cleaned_transcripts.append({
+                    "timestamp": entry["timestamp"],
+                    "speaker": entry["speaker"],
+                    "text": text
+                })
+            
+            # Merge and sort transcripts by timestamp
+            cleaned_transcripts.sort(key=lambda x: x["timestamp"])
             
             # Create markdown content
             content = f"# Conversation Transcript - {self.room_id}\n\n"
             content += f"*Session started at {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}*\n\n"
             
-            for entry in all_transcripts:
+            for entry in cleaned_transcripts:
                 content += f"### {entry['speaker']} - {entry['timestamp']}\n\n"
                 content += f"{entry['text']}\n\n"
             
@@ -119,6 +269,8 @@ class TranscriptionAssistant(VoiceAssistant):
             return abs_path
         except Exception as e:
             print(f"Error saving transcript to file: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
 # Function to forward transcriptions to terminal
@@ -223,6 +375,29 @@ async def create_landingpage_assistant(ctx: JobContext):
 
     await asyncio.sleep(1)
     await assistant.say("Hello, I'm Dashboard. Welcome to VoiceForge AI! How may I help you today?", allow_interruptions=True)
+    
+    @ctx.room.on("message")
+    def on_message(message):
+        """Capture any pipeline messages for debugging."""
+        try:
+            if isinstance(message, str) and '"agent_transcript":' in message:
+                print(f"\nDEBUG - CAPTURED MESSAGE: {message[:100]}...")
+                
+                try:
+                    msg_data = json.loads(message)
+                    if "agent_transcript" in msg_data:
+                        transcript = msg_data["agent_transcript"]
+                        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        assistant.transcription_history.append({
+                            "timestamp": timestamp,
+                            "speaker": "ASSISTANT",
+                            "text": transcript
+                        })
+                        print(f"\nASSISTANT PIPELINE TRANSCRIPT SAVED: {transcript}")
+                except Exception as e:
+                    print(f"Error parsing message: {e}")
+        except Exception as e:
+            print(f"Error in message handler: {e}")
 
 async def create_onboarding_assistant(ctx: JobContext):
     initial_ctx = llm.ChatContext().append(
@@ -309,6 +484,30 @@ async def create_onboarding_assistant(ctx: JobContext):
     await assistant.say("Hello! I'm Alice, and I'll be your guide in creating your new AI voice agent here on the VoiceForge AI platform. "
     "My job is to ask you some questions to understand exactly what you need so we can build the perfect assistant for you. "
     "To kick things off, could you tell me: What will be the main purpose or primary goal of the voice agent you want to create?", allow_interruptions=True)
+
+    # Add the same message handling for onboarding assistant
+    @ctx.room.on("message")
+    def on_message(message):
+        """Capture any pipeline messages for debugging."""
+        try:
+            if isinstance(message, str) and '"agent_transcript":' in message:
+                print(f"\nDEBUG - CAPTURED MESSAGE: {message[:100]}...")
+                
+                try:
+                    msg_data = json.loads(message)
+                    if "agent_transcript" in msg_data:
+                        transcript = msg_data["agent_transcript"]
+                        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        assistant.transcription_history.append({
+                            "timestamp": timestamp,
+                            "speaker": "ASSISTANT",
+                            "text": transcript
+                        })
+                        print(f"\nASSISTANT PIPELINE TRANSCRIPT SAVED: {transcript}")
+                except Exception as e:
+                    print(f"Error parsing message: {e}")
+        except Exception as e:
+            print(f"Error in message handler: {e}")
 
 # Add a function to handle direct transcriptions from audio tracks
 async def process_audio_tracks_with_transcription(ctx: JobContext):
