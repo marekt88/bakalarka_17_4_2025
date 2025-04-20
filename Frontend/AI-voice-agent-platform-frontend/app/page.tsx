@@ -25,11 +25,11 @@ export default function LandingPage() {
           <p className="text-xl text-white/70 mb-8">Build, customize, and deploy intelligent voice assistants for your business</p>
           
           <div className="flex flex-col items-center mb-8">
-            {/* Replace MicrophoneButton with UnifiedVoiceAgent */}
+            {/* Use RAG-enabled assistant */}
             <div className="w-full max-w-md">
-              <UnifiedVoiceAgent assistantName="ALICE" />
+              <UnifiedVoiceAgent assistantName="ALICE" assistantType="landing_rag" />
             </div>
-            <p className="text-lg text-white/70 mt-4">Give it a try</p>
+            <p className="text-lg text-white/70 mt-4">Give it a try (RAG-enabled)</p>
           </div>
 
           <Button asChild size="lg" className="bg-purple-600 hover:bg-purple-700">

@@ -3,16 +3,50 @@ import os
 import time
 import datetime
 from pathlib import Path
-import json  # Add json for debugging
+import json
 
 from dotenv import load_dotenv
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
 from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import openai, silero
-from livekit.agents import transcription  # Add transcription module
-from livekit.agents import stt  # Add STT module
+from livekit.agents import transcription
+from livekit.agents import stt
+
+# Import our RAG system with fixed imports
+from knowledge_indexer import run_indexer
+from rag_manager import rag_manager
 
 load_dotenv()
+
+# Check for new knowledgebase files and update index if needed
+def check_knowledgebase_updates():
+    """Check if knowledgebase has new files and update the index if needed."""
+    try:
+        print("Checking for new knowledge files...")
+        updated = run_indexer()
+        if updated:
+            print("Knowledge base updated successfully!")
+            # Reload the RAG manager with new data
+            rag_manager.load()
+        else:
+            print("No new knowledge files found.")
+    except Exception as e:
+        print(f"Error checking knowledge base updates: {e}")
+
+# Initialize the RAG system at startup
+def init_rag_system():
+    """Initialize the RAG system by loading the vector database."""
+    try:
+        print("Initializing RAG system...")
+        if rag_manager.load():
+            print("RAG system initialized successfully!")
+            return True
+        else:
+            print("Failed to initialize RAG system. Vector database may not exist yet.")
+            return False
+    except Exception as e:
+        print(f"Error initializing RAG system: {e}")
+        return False
 
 # Create a custom Assistant class with transcription handling and storage
 class TranscriptionAssistant(VoiceAssistant):
@@ -607,9 +641,218 @@ def save_standalone_transcript(room_id, transcript_history, start_time):
         print(f"Error saving standalone transcript: {e}")
         return None
 
+async def create_landingpage_assistant_with_rag(ctx: JobContext):
+    """Create a landing page assistant with RAG capabilities."""
+    initial_ctx = llm.ChatContext().append(
+        role="system",
+        text=(
+            "## Identity & Purpose\n"
+            "You are Ava, a friendly, knowledgeable, and enthusiastic AI guide for the VoiceForge AI platform, specifically interacting with users on the landing page. "
+            "Your primary purpose is to welcome visitors, clearly explain how our platform uniquely allows users to create custom AI voice agents *using their own voice*, answer their questions about features, benefits, and ease of use, and guide them on how to get started. You are the first point of contact, aiming to build excitement and trust.\n\n"
+            "## Voice & Persona\n"
+            "- **Personality:** Sound welcoming, helpful, enthusiastic, clear, simple, patient, encouraging, and supportive. Make users feel capable. Maintain a professional yet approachable demeanor.\n"
+            "- **Speech Characteristics:** Use a clear, natural conversational tone with contractions (e.g., 'you're', 'it's'). Speak at a moderate, easy-to-follow pace. Use brief pauses after key concepts. Sound slightly upbeat and positive. Avoid overly technical jargon initially, but be prepared to explain concepts simply if asked.\n\n"
+            "## Knowledge Context\n"
+            "You have been equipped with a knowledge base about IMPOFAI, an AI agency that specializes in implementing artificial intelligence solutions for businesses. When users ask questions related to AI services, offerings, or implementation, use the provided context to give specific and accurate information about IMPOFAI's services, benefits, and processes. If the context doesn't address the user's question, acknowledge that you'd need to get more information.\n\n"
+            "## Core Task & Interaction Guidelines\n"
+            "1.  **Welcome & Explain:** Greet users warmly. Explain the core value proposition: easy AI voice agent creation *using voice interaction* with an AI guide.\n"
+            "2.  **Answer Questions:** Listen for user questions about 'how it works,' 'features' (PDF upload, RAG, FAQ gen, testing panel, customization), 'use cases,' 'simplicity,' 'cost,' 'comparison to alternatives,' etc. Use the provided context when relevant.\n"
+            "3.  **Emphasize Simplicity & Benefits:** Consistently highlight the ease of use (voice-guided AI creator, minimal settings) and benefits (speed, affordability vs. agencies, powerful results).\n"
+            "4.  **Handle Concerns:** Address potential skepticism about complexity (stress the AI guide), cost (mention affordability vs. high agency fees), and effectiveness (explain RAG/PDF knowledge).\n"
+            "5.  **Guide & Convert:** Encourage users to 'Get Started' or 'Sign Up.' Point them to relevant information if requested.\n"
+            "6.  **Response Style:** Keep initial responses concise (<40 words). Expand when providing details. Focus on benefits. Use analogies (e.g., 'like having an expert assistant sit with you'). Ask clarifying questions if needed.\n"
+            "When you're provided with context from the knowledge base, use it to give accurate answers while maintaining your friendly, helpful tone.\n"
+        ),
+    )
+    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+
+    # Use TranscriptionAssistant instead of VoiceAssistant
+    assistant = TranscriptionAssistant(
+        vad=silero.VAD.load(),
+        stt=openai.STT(),
+        llm=openai.LLM(),
+        tts=openai.TTS(voice="alloy"),  # Using a more formal voice
+        chat_ctx=initial_ctx,
+        # Add RAG callback before LLM processing
+        before_llm_cb=rag_manager.enrich_chat_context
+    )
+    
+    # Set room ID for transcript filename
+    if ctx.room and ctx.room.name:
+        assistant.set_room_id(ctx.room.name)
+    
+    # Register cleanup handlers to explicitly save transcript before disconnect
+    @ctx.room.on("disconnected")
+    def on_disconnected():
+        print("Room disconnected, saving transcript...")
+        # Force the transcript to be saved
+        file_path = assistant.save_transcript_to_file()
+        print(f"Transcript saved to: {file_path}")
+    
+    # Also register for participant disconnections to catch client leaving
+    @ctx.room.on("participant_disconnected")
+    def on_participant_disconnected(participant):
+        print(f"Participant {participant.identity} disconnected, saving transcript...")
+        file_path = assistant.save_transcript_to_file()
+        print(f"Transcript saved to: {file_path}")
+    
+    # Monitor server shutdowns as well - use proper connection state checking
+    @ctx.room.on("connection_state_changed")
+    def on_connection_state_changed(state):
+        # Check if state is int or enum
+        try:
+            if isinstance(state, int) and state == 0:  # Assuming 0 means disconnected
+                print("Connection state changed to DISCONNECTED (int value), saving transcript...")
+                file_path = assistant.save_transcript_to_file()
+                print(f"Transcript saved to: {file_path}")
+            elif hasattr(state, 'name') and state.name == "DISCONNECTED":
+                print("Connection state changed to DISCONNECTED (enum), saving transcript...")
+                file_path = assistant.save_transcript_to_file()
+                print(f"Transcript saved to: {file_path}")
+        except Exception as e:
+            print(f"Error in connection_state_changed handler: {e}")
+            # Try to save transcript anyway
+            assistant.save_transcript_to_file()
+    
+    assistant.start(ctx.room)
+
+    await asyncio.sleep(1)
+    await assistant.say("Hello, I'm Ava. Welcome to VoiceForge AI! How may I help you today? Feel free to ask me about our AI voice agent platform or any specific AI services.", allow_interruptions=True)
+    
+    @ctx.room.on("message")
+    def on_message(message):
+        """Capture any pipeline messages for debugging."""
+        try:
+            if isinstance(message, str) and '"agent_transcript":' in message:
+                print(f"\nDEBUG - CAPTURED MESSAGE: {message[:100]}...")
+                
+                try:
+                    msg_data = json.loads(message)
+                    if "agent_transcript" in msg_data:
+                        transcript = msg_data["agent_transcript"]
+                        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        assistant.transcription_history.append({
+                            "timestamp": timestamp,
+                            "speaker": "ASSISTANT",
+                            "text": transcript
+                        })
+                        print(f"\nASSISTANT PIPELINE TRANSCRIPT SAVED: {transcript}")
+                except Exception as e:
+                    print(f"Error parsing message: {e}")
+        except Exception as e:
+            print(f"Error in message handler: {e}")
+
+async def create_onboarding_assistant_with_rag(ctx: JobContext):
+    """Create an onboarding assistant with RAG capabilities."""
+    initial_ctx = llm.ChatContext().append(
+        role="system",
+        text=(
+            "## Identity & Purpose\n"
+            "You are Alice, an AI Creation Consultant for the VoiceForge AI platform. Your specific purpose is to interactively guide users through the process of defining the requirements for a *new* AI voice agent they want to build. You achieve this by asking targeted questions to gather all necessary details about the desired agent's name, purpose, persona, voice characteristics, knowledge needs, and key conversational elements. You are essentially conducting a requirements gathering interview in a conversational format.\n\n"
+            "## Voice & Persona\n"
+            "- **Personality:** Sound helpful, knowledgeable, patient, and methodical. Be friendly but maintain a professional consultant demeanor focused on the task. Be encouraging and make the user feel supported in the creation process. You are inquisitive and detail-oriented.\n"
+            "- **Speech Characteristics:** Use a clear, calm, and guiding tone. Speak at a moderate pace. Use polite language and structured questions. Employ phrasing like 'Okay, let's move on to...', 'Could you tell me about...', 'To help me understand better...'. Avoid humor or overly casual language. Ensure clarity above all.\n\n"
+            "## Knowledge Context\n"
+            "You have been equipped with a knowledge base about IMPOFAI, an AI agency that specializes in implementing artificial intelligence solutions for businesses. When users ask questions related to AI services, offerings, implementation, or use cases, use the provided context to give specific and accurate information about IMPOFAI's services and capabilities. This will help you provide realistic examples and suggestions during the agent creation process.\n\n"
+            "## Core Task & Interaction Guidelines\n"
+            "1.  **Introduce & Explain Goal:** Start by introducing yourself and explaining that your purpose is to ask questions to understand the user's vision for their new AI agent.\n"
+            "2.  **Systematic Questioning:** Ask questions one major topic at a time to gather the required information (see checklist below). Don't overwhelm the user.\n"
+            "3.  **Clarify & Confirm:** If a user's answer is vague, ask follow-up questions to clarify. Briefly summarize and confirm understanding before moving to the next topic (e.g., 'Got it. So the agent's main goal is lead qualification. Is that correct?').\n"
+            "4.  **Explain Relevance:** Briefly explain *why* certain information is helpful if needed (e.g., 'Knowing the target audience helps us tailor the agent's language and tone effectively.').\n"
+            "5.  **Provide Examples:** When appropriate, use examples from the knowledge base to illustrate possibilities for AI voice agents, such as customer service applications, sales processes, or internal company assistance.\n"
+            "6.  **Handle Uncertainty:** If the user is unsure, acknowledge it and suggest starting with a baseline or revisiting it later ('That's perfectly fine if you're not sure yet. We can start with a standard friendly tone and adjust it during testing. Sound good?').\n"
+            "7.  **Guide the Flow:** Lead the conversation logically from high-level purpose down to more specific details like tone or key phrases.\n"
+            "8.  **Focus on the *Target* Agent:** Remember, all questions are about the agent the *user wants to create*, not about yourself (Alice).\n"
+            "When you're provided with context from the knowledge base, use it to give accurate answers while maintaining your professional, helpful tone.\n"
+        ),
+    )
+    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+
+    # Use TranscriptionAssistant instead of VoiceAssistant
+    assistant = TranscriptionAssistant(
+        vad=silero.VAD.load(),
+        stt=openai.STT(),
+        llm=openai.LLM(),
+        tts=openai.TTS(voice="nova"),  # Using a warmer, more casual voice
+        chat_ctx=initial_ctx,
+        # Add RAG callback before LLM processing
+        before_llm_cb=rag_manager.enrich_chat_context
+    )
+    
+    # Set room ID for transcript filename
+    if ctx.room and ctx.room.name:
+        assistant.set_room_id(ctx.room.name)
+    
+    # Register cleanup handlers to explicitly save transcript before disconnect
+    @ctx.room.on("disconnected")
+    def on_disconnected():
+        print("Room disconnected, saving transcript...")
+        # Force the transcript to be saved
+        file_path = assistant.save_transcript_to_file()
+        print(f"Transcript saved to: {file_path}")
+    
+    # Also register for participant disconnections to catch client leaving
+    @ctx.room.on("participant_disconnected")
+    def on_participant_disconnected(participant):
+        print(f"Participant {participant.identity} disconnected, saving transcript...")
+        file_path = assistant.save_transcript_to_file()
+        print(f"Transcript saved to: {file_path}")
+    
+    # Monitor server shutdowns as well - use proper connection state checking
+    @ctx.room.on("connection_state_changed")
+    def on_connection_state_changed(state):
+        # Check if state is int or enum
+        try:
+            if isinstance(state, int) and state == 0:  # Assuming 0 means disconnected
+                print("Connection state changed to DISCONNECTED (int value), saving transcript...")
+                file_path = assistant.save_transcript_to_file()
+                print(f"Transcript saved to: {file_path}")
+            elif hasattr(state, 'name') and state.name == "DISCONNECTED":
+                print("Connection state changed to DISCONNECTED (enum), saving transcript...")
+                file_path = assistant.save_transcript_to_file()
+                print(f"Transcript saved to: {file_path}")
+        except Exception as e:
+            print(f"Error in connection_state_changed handler: {e}")
+            # Try to save transcript anyway
+            assistant.save_transcript_to_file()
+    
+    assistant.start(ctx.room)
+
+    await asyncio.sleep(1)
+    await assistant.say("Hello! I'm Alice, and I'll be your guide in creating your new AI voice agent here on the VoiceForge AI platform. "
+    "My job is to ask you some questions to understand exactly what you need so we can build the perfect assistant for you. "
+    "To kick things off, could you tell me: What will be the main purpose or primary goal of the voice agent you want to create?", allow_interruptions=True)
+
+    # Add the same message handling for onboarding assistant
+    @ctx.room.on("message")
+    def on_message(message):
+        """Capture any pipeline messages for debugging."""
+        try:
+            if isinstance(message, str) and '"agent_transcript":' in message:
+                print(f"\nDEBUG - CAPTURED MESSAGE: {message[:100]}...")
+                
+                try:
+                    msg_data = json.loads(message)
+                    if "agent_transcript" in msg_data:
+                        transcript = msg_data["agent_transcript"]
+                        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        assistant.transcription_history.append({
+                            "timestamp": timestamp,
+                            "speaker": "ASSISTANT",
+                            "text": transcript
+                        })
+                        print(f"\nASSISTANT PIPELINE TRANSCRIPT SAVED: {transcript}")
+                except Exception as e:
+                    print(f"Error parsing message: {e}")
+        except Exception as e:
+            print(f"Error in message handler: {e}")
+
 async def entrypoint(ctx: JobContext):
     # Get the assistant version from the room name
     room_name = ctx.room.name if ctx.room and ctx.room.name else ""
+    
+    # Always check for knowledgebase updates at startup of a new session
+    check_knowledgebase_updates()
     
     # For direct transcription without using an assistant
     if "transcribe" in room_name.lower():
@@ -619,12 +862,30 @@ async def entrypoint(ctx: JobContext):
     
     # Check for specific identifiers in the room name
     if "onboarding" in room_name.lower():
-        await create_onboarding_assistant(ctx)
+        if "rag" in room_name.lower() or "context" in room_name.lower():
+            print("Starting onboarding assistant WITH RAG support")
+            await create_onboarding_assistant_with_rag(ctx)
+        else:
+            print("Starting regular onboarding assistant")
+            await create_onboarding_assistant(ctx)
     elif "landing" in room_name.lower():
-        await create_landingpage_assistant(ctx)
+        if "rag" in room_name.lower() or "context" in room_name.lower():
+            print("Starting landing page assistant WITH RAG support")
+            await create_landingpage_assistant_with_rag(ctx)
+        else:
+            print("Starting regular landing page assistant")
+            await create_landingpage_assistant(ctx)
     else:
-        # Default to landing page assistant if no specific identifier
-        await create_landingpage_assistant(ctx)
+        # Check if RAG is enabled for default case
+        rag_enabled = init_rag_system()
+        
+        # Default to landing page assistant with RAG if available
+        if rag_enabled:
+            print("Starting default landing page assistant WITH RAG support")
+            await create_landingpage_assistant_with_rag(ctx)
+        else:
+            print("Starting default landing page assistant without RAG (system not initialized)")
+            await create_landingpage_assistant(ctx)
 
 if __name__ == "__main__":
     # Create transcripts directory at startup to ensure it exists
@@ -632,5 +893,10 @@ if __name__ == "__main__":
     transcripts_dir = transcript_root / "transcripts"
     transcripts_dir.mkdir(exist_ok=True)
     print(f"Transcript directory initialized at: {os.path.abspath(transcripts_dir)}")
+    
+    # Initialize the RAG system
+    if init_rag_system():
+        # Check for knowledgebase updates
+        check_knowledgebase_updates()
     
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
