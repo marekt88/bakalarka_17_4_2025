@@ -18,34 +18,111 @@ from rag_manager import rag_manager
 
 load_dotenv()
 
+# Initialize directories for knowledge base and RAG index
+def initialize_directories():
+    """Initialize the necessary directories for the application."""
+    base_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+    
+    # Create transcripts directory
+    transcripts_dir = base_dir / "transcripts"
+    transcripts_dir.mkdir(exist_ok=True)
+    print(f"Transcript directory initialized at: {os.path.abspath(transcripts_dir)}")
+    
+    # Create knowledgebase directory
+    knowledge_dir = base_dir / "knowledgebase"
+    knowledge_dir.mkdir(exist_ok=True)
+    print(f"Knowledge directory initialized at: {os.path.abspath(knowledge_dir)}")
+    
+    # Create RAG index directory
+    rag_index_dir = base_dir / "rag_index"
+    rag_index_dir.mkdir(exist_ok=True)
+    print(f"RAG index directory initialized at: {os.path.abspath(rag_index_dir)}")
+    
+    return {
+        "transcripts_dir": transcripts_dir,
+        "knowledge_dir": knowledge_dir,
+        "rag_index_dir": rag_index_dir
+    }
+
 # Check for new knowledgebase files and update index if needed
-def check_knowledgebase_updates():
-    """Check if knowledgebase has new files and update the index if needed."""
+def check_knowledgebase_updates(force_update=False):
+    """
+    Check if knowledgebase has new files and update the index if needed.
+    
+    Args:
+        force_update: If True, force the indexer to run even if no new files are detected
+        
+    Returns:
+        bool: True if the index was updated, False otherwise
+    """
     try:
         print("Checking for new knowledge files...")
         updated = run_indexer()
         if updated:
             print("Knowledge base updated successfully!")
             # Reload the RAG manager with new data
-            rag_manager.load()
+            success = rag_manager.load()
+            print(f"RAG manager reloaded: {'Success' if success else 'Failed'}")
+            return True
+        elif force_update:
+            print("Forcing RAG system initialization...")
+            success = rag_manager.load()
+            print(f"RAG manager initialization: {'Success' if success else 'Failed'}")
+            return success
         else:
             print("No new knowledge files found.")
+            return False
     except Exception as e:
         print(f"Error checking knowledge base updates: {e}")
+        return False
 
 # Initialize the RAG system at startup
 def init_rag_system():
     """Initialize the RAG system by loading the vector database."""
     try:
         print("Initializing RAG system...")
+        
+        # First check if knowledgebase directory is empty
+        knowledge_dir = Path(os.path.dirname(os.path.abspath(__file__))) / "knowledgebase"
+        knowledge_files = list(knowledge_dir.glob("*.txt"))
+        
+        if not knowledge_files:
+            print("WARNING: No knowledge files found in the knowledgebase directory.")
+            print("Add .txt files to the knowledgebase directory to enable RAG functionality.")
+            return False
+        
+        # Check for the RAG index files
+        rag_index_dir = Path(os.path.dirname(os.path.abspath(__file__))) / "rag_index"
+        vdb_path = rag_index_dir / "vdb_data"
+        
+        # If the index doesn't exist, run the indexer
+        if not vdb_path.exists():
+            print("No RAG index found. Running indexer to create it...")
+            updated = run_indexer()
+            if not updated:
+                print("Failed to create RAG index. Check for errors in the knowledge indexer.")
+                return False
+        
+        # Try to load the RAG system
         if rag_manager.load():
             print("RAG system initialized successfully!")
             return True
         else:
-            print("Failed to initialize RAG system. Vector database may not exist yet.")
+            # If loading failed, try running the indexer again
+            print("Failed to load RAG system. Attempting to rebuild index...")
+            updated = run_indexer()
+            if updated:
+                # Try loading again after rebuild
+                if rag_manager.load():
+                    print("RAG system initialized successfully after rebuilding index!")
+                    return True
+                
+            print("Failed to initialize RAG system. Vector database may not exist or is corrupted.")
             return False
     except Exception as e:
         print(f"Error initializing RAG system: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 # Create a custom Assistant class with transcription handling and storage
@@ -221,8 +298,19 @@ class TranscriptionAssistant(VoiceAssistant):
             transcripts_dir = transcript_root / "transcripts"
             transcripts_dir.mkdir(exist_ok=True)
             
+            # Create appropriate subfolder based on room name
+            subfolder = "other"  # Default subfolder
+            if "landing" in self.room_id.lower():
+                subfolder = "landing"
+            elif "onboarding" in self.room_id.lower():
+                subfolder = "onboarding"
+            
+            # Create the subfolder if it doesn't exist
+            subfolder_path = transcripts_dir / subfolder
+            subfolder_path.mkdir(exist_ok=True)
+            
             # Create filename with room ID and timestamp
-            filename = transcripts_dir / f"{self.room_id}_transcript.md"
+            filename = subfolder_path / f"{self.room_id}_transcript.md"
             
             # Direct logging of what we're about to process
             print(f"\nDEBUG - TRANSCRIPT DATA BEFORE PROCESSING:")
