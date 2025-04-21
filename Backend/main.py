@@ -4,6 +4,7 @@ import time
 import datetime
 from pathlib import Path
 import json
+import threading
 
 from dotenv import load_dotenv
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
@@ -15,8 +16,38 @@ from livekit.agents import stt
 # Import our RAG system with fixed imports
 from knowledge_indexer import run_indexer
 from rag_manager import rag_manager
+from transcript_processor import TranscriptProcessor
 
 load_dotenv()
+
+# Global variable to store the transcript processor task
+transcript_processor_task = None
+
+# Function to start transcript processor in the background
+def start_transcript_processor():
+    """Start the transcript processor in a separate thread."""
+    async def run_processor():
+        processor = TranscriptProcessor()
+        
+        # Initial processing of any new files
+        await processor.process_new_transcripts()
+        
+        # Continue monitoring for new transcripts
+        while True:
+            await asyncio.sleep(30)  # Check every 30 seconds
+            await processor.process_new_transcripts()
+    
+    # Create a new event loop for the transcript processor
+    def run_async_loop():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(run_processor())
+    
+    # Start the transcript processor in a separate thread
+    thread = threading.Thread(target=run_async_loop, daemon=True)
+    thread.start()
+    print("Transcript processor started in background")
+    return thread
 
 # Initialize directories for knowledge base and RAG index
 def initialize_directories():
@@ -27,6 +58,21 @@ def initialize_directories():
     transcripts_dir = base_dir / "transcripts"
     transcripts_dir.mkdir(exist_ok=True)
     print(f"Transcript directory initialized at: {os.path.abspath(transcripts_dir)}")
+    
+    # Create transcript subdirectories
+    landing_dir = transcripts_dir / "landing"
+    landing_dir.mkdir(exist_ok=True)
+    
+    onboarding_dir = transcripts_dir / "onboarding" 
+    onboarding_dir.mkdir(exist_ok=True)
+    
+    other_dir = transcripts_dir / "other"
+    other_dir.mkdir(exist_ok=True)
+    
+    # Create generated prompts directory
+    prompts_dir = base_dir / "generated_prompts"
+    prompts_dir.mkdir(exist_ok=True)
+    print(f"Prompts directory initialized at: {os.path.abspath(prompts_dir)}")
     
     # Create knowledgebase directory
     knowledge_dir = base_dir / "knowledgebase"
@@ -40,6 +86,10 @@ def initialize_directories():
     
     return {
         "transcripts_dir": transcripts_dir,
+        "landing_dir": landing_dir,
+        "onboarding_dir": onboarding_dir,
+        "other_dir": other_dir,
+        "prompts_dir": prompts_dir,
         "knowledge_dir": knowledge_dir,
         "rag_index_dir": rag_index_dir
     }
@@ -986,5 +1036,8 @@ if __name__ == "__main__":
     if init_rag_system():
         # Check for knowledgebase updates
         check_knowledgebase_updates()
+    
+    # Start the transcript processor in the background
+    transcript_processor_task = start_transcript_processor()
     
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
