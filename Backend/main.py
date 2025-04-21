@@ -985,6 +985,89 @@ async def create_onboarding_assistant_with_rag(ctx: JobContext):
         except Exception as e:
             print(f"Error in message handler: {e}")
 
+async def create_generated_assistant(ctx: JobContext):
+    """Create a simple helpful assistant."""
+    initial_ctx = llm.ChatContext().append(
+        role="system",
+        text="You are a helpful assistant."
+    )
+    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+
+    # Use TranscriptionAssistant for consistent handling
+    assistant = TranscriptionAssistant(
+        vad=silero.VAD.load(),
+        stt=openai.STT(),
+        llm=openai.LLM(),
+        tts=openai.TTS(voice="echo"),  # Using echo voice
+        chat_ctx=initial_ctx
+    )
+    
+    # Set room ID for transcript filename
+    if ctx.room and ctx.room.name:
+        assistant.set_room_id(ctx.room.name)
+    
+    # Register cleanup handlers to explicitly save transcript before disconnect
+    @ctx.room.on("disconnected")
+    def on_disconnected():
+        print("Room disconnected, saving transcript...")
+        # Force the transcript to be saved
+        file_path = assistant.save_transcript_to_file()
+        print(f"Transcript saved to: {file_path}")
+    
+    # Also register for participant disconnections to catch client leaving
+    @ctx.room.on("participant_disconnected")
+    def on_participant_disconnected(participant):
+        print(f"Participant {participant.identity} disconnected, saving transcript...")
+        file_path = assistant.save_transcript_to_file()
+        print(f"Transcript saved to: {file_path}")
+    
+    # Monitor server shutdowns as well - use proper connection state checking
+    @ctx.room.on("connection_state_changed")
+    def on_connection_state_changed(state):
+        # Check if state is int or enum
+        try:
+            if isinstance(state, int) and state == 0:  # Assuming 0 means disconnected
+                print("Connection state changed to DISCONNECTED (int value), saving transcript...")
+                file_path = assistant.save_transcript_to_file()
+                print(f"Transcript saved to: {file_path}")
+            elif hasattr(state, 'name') and state.name == "DISCONNECTED":
+                print("Connection state changed to DISCONNECTED (enum), saving transcript...")
+                file_path = assistant.save_transcript_to_file()
+                print(f"Transcript saved to: {file_path}")
+        except Exception as e:
+            print(f"Error in connection_state_changed handler: {e}")
+            # Try to save transcript anyway
+            assistant.save_transcript_to_file()
+    
+    assistant.start(ctx.room)
+
+    await asyncio.sleep(1)
+    await assistant.say("Hello, I'm your helpful assistant. How may I assist you today?", allow_interruptions=True)
+    
+    # Add message handling for debugging
+    @ctx.room.on("message")
+    def on_message(message):
+        """Capture any pipeline messages for debugging."""
+        try:
+            if isinstance(message, str) and '"agent_transcript":' in message:
+                print(f"\nDEBUG - CAPTURED MESSAGE: {message[:100]}...")
+                
+                try:
+                    msg_data = json.loads(message)
+                    if "agent_transcript" in msg_data:
+                        transcript = msg_data["agent_transcript"]
+                        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        assistant.transcription_history.append({
+                            "timestamp": timestamp,
+                            "speaker": "ASSISTANT",
+                            "text": transcript
+                        })
+                        print(f"\nASSISTANT PIPELINE TRANSCRIPT SAVED: {transcript}")
+                except Exception as e:
+                    print(f"Error parsing message: {e}")
+        except Exception as e:
+            print(f"Error in message handler: {e}")
+
 async def entrypoint(ctx: JobContext):
     # Get the assistant version from the room name
     room_name = ctx.room.name if ctx.room and ctx.room.name else ""
@@ -1013,6 +1096,9 @@ async def entrypoint(ctx: JobContext):
         else:
             print("Starting regular landing page assistant")
             await create_landingpage_assistant(ctx)
+    elif "generated_assistant" in room_name.lower():
+        print("Starting generated helpful assistant")
+        await create_generated_assistant(ctx)
     else:
         # Check if RAG is enabled for default case
         rag_enabled = init_rag_system()

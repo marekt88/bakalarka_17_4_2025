@@ -5,40 +5,17 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { ProgressSteps } from '@/components/progress-steps'
 import { ToggleButtons } from '@/components/toggle-buttons'
-import { ProcessSteps } from '@/components/process-steps'
 import { Button } from '@/components/ui/button'
 import { Grid, Save, Mic, FileText } from 'lucide-react'
 import { SaveChangesPopup } from '@/components/save-changes-popup'
 import { useSaveChanges } from '@/hooks/use-save-changes'
+import { UnifiedVoiceAgent } from '@/components/UnifiedVoiceAgent'
 
 const steps = [
   { number: 1, title: 'Choose a voice' },
   { number: 2, title: 'Load files' },
   { number: 3, title: 'Answer questions' },
   { number: 4, title: 'Test and refine', isActive: true },
-]
-
-const processSteps = [
-  {
-    number: 1,
-    description: "Alice will explain the process and connect you with your new assistant"
-  },
-  {
-    number: 2,
-    description: "You will talk to your new assistant and alice will store the call recording for context"
-  },
-  {
-    number: 3,
-    description: "You will be connected back to Alice and you will explain what to change"
-  },
-  {
-    number: 4,
-    description: "Alice will take notes and make the changes."
-  },
-  {
-    number: 5,
-    description: "Repeat this process untill you are happy with the results"
-  },
 ]
 
 export default function TestAndRefineOverviewPage() {
@@ -54,10 +31,6 @@ export default function TestAndRefineOverviewPage() {
 
     return () => clearTimeout(timer)
   }, [])
-
-  const handleContinue = () => {
-    router.push('/test-and-refine-with-alice')
-  }
 
   const handleOptionToggle = (option: 'test' | 'edit') => {
     if (option === 'edit') {
@@ -125,15 +98,16 @@ export default function TestAndRefineOverviewPage() {
 
           <ToggleButtons activeOption={activeOption} onToggle={handleOptionToggle} />
 
-          <ProcessSteps steps={processSteps} />
-
-          <div className="flex justify-end">
-            <Button 
-              className="bg-purple-600 hover:bg-purple-700 text-white px-8"
-              onClick={handleContinue}
-            >
-              CONTINUE →
-            </Button>
+          {/* Replace the VoiceAgentInterface with UnifiedVoiceAgent */}
+          <div className="p-6 border border-white/10 rounded-lg bg-white/5">
+            <h2 className="text-xl font-semibold mb-6">Test with your assistant</h2>
+            
+            {/* Renamed simple helpful assistant using UnifiedVoiceAgent */}
+            <UnifiedVoiceAgent
+              assistantName="YOUR AGENT"
+              assistantType="generated_assistant"
+              className="max-w-full mx-auto"
+            />
           </div>
         </div>
       </main>
