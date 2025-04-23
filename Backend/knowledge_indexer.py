@@ -3,6 +3,7 @@ import pickle
 import uuid
 import os
 import aiohttp
+import io
 from pathlib import Path
 from datetime import datetime
 from livekit.agents import tokenize
@@ -12,6 +13,14 @@ from dotenv import load_dotenv
 
 # Import our custom RAG implementation instead of livekit.plugins.rag
 from custom_rag import IndexBuilder, tokenize_paragraphs
+
+# Import PDF processing library
+try:
+    from pypdf import PdfReader
+    PDF_SUPPORT = True
+except ImportError:
+    print("Warning: pypdf not found. PDF support disabled.")
+    PDF_SUPPORT = False
 
 load_dotenv()
 
@@ -50,13 +59,55 @@ def save_processed_files(processed_files):
     with open(PROCESSED_FILES_RECORD, "w", encoding="utf-8") as f:
         f.write("\n".join(processed_files))
 
+def extract_text_from_pdf(file_path):
+    """Extract text content from a PDF file."""
+    if not PDF_SUPPORT:
+        print(f"Warning: PDF support disabled. Cannot process {file_path}")
+        return ""
+        
+    try:
+        pdf_reader = PdfReader(file_path)
+        text_content = []
+        
+        # Extract text from each page
+        for page in pdf_reader.pages:
+            page_text = page.extract_text()
+            if page_text:
+                text_content.append(page_text)
+        
+        # Join all pages with double newlines to separate them clearly
+        full_text = "\n\n".join(text_content)
+        print(f"Extracted {len(full_text)} characters from PDF: {file_path}")
+        return full_text
+    except Exception as e:
+        print(f"Error extracting text from PDF {file_path}: {e}")
+        return ""
+
 async def process_knowledge_file(file_path, idx_builder, paragraphs_by_uuid, http_session):
     """Process a single knowledge file, generating embeddings for each paragraph."""
     print(f"Processing file: {file_path}")
     
-    # Read file content
-    with open(file_path, "r", encoding="utf-8") as f:
-        raw_data = f.read()
+    # Read file content based on file extension
+    file_path_str = str(file_path).lower()
+    
+    if file_path_str.endswith('.pdf'):
+        raw_data = extract_text_from_pdf(file_path)
+        if not raw_data:
+            print(f"No text extracted from PDF: {file_path}")
+            return 0
+    else:
+        # Default to reading as text file
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                raw_data = f.read()
+        except UnicodeDecodeError:
+            # Try with a different encoding if UTF-8 fails
+            try:
+                with open(file_path, "r", encoding="latin-1") as f:
+                    raw_data = f.read()
+            except Exception as e:
+                print(f"Error reading file {file_path}: {e}")
+                return 0
     
     # Process paragraphs - use our custom tokenize_paragraphs function if tokenize.basic is not available
     file_paragraphs = 0
@@ -85,11 +136,26 @@ async def process_knowledge_file(file_path, idx_builder, paragraphs_by_uuid, htt
 
 async def main():
     """Process all knowledge base files and build vector database."""
+    # Check if pypdf is installed for PDF support
+    if not PDF_SUPPORT:
+        try:
+            import pip
+            print("Installing pypdf for PDF support...")
+            from subprocess import check_call
+            check_call(["pip", "install", "pypdf"])
+            from pypdf import PdfReader
+            global PDF_SUPPORT
+            PDF_SUPPORT = True
+            print("Successfully installed pypdf for PDF support")
+        except Exception as e:
+            print(f"Failed to install pypdf: {e}")
+            print("PDF files will be skipped. Please install pypdf manually.")
+    
     # Load existing processed files
     processed_files = load_processed_files()
     
-    # Get all .txt files in knowledge directory
-    knowledge_files = list(KNOWLEDGE_DIR.glob("*.txt"))
+    # Get all .txt and .pdf files in knowledge directory
+    knowledge_files = list(KNOWLEDGE_DIR.glob("*.txt")) + list(KNOWLEDGE_DIR.glob("*.pdf"))
     
     # Check if there are any new files to process
     new_files = [f for f in knowledge_files if str(f) not in processed_files]

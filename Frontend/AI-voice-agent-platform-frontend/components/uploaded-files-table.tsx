@@ -7,7 +7,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
-import { MoreHorizontal } from 'lucide-react'
+import { Trash2 } from 'lucide-react'
 
 interface UploadedFile {
   id: string
@@ -32,7 +32,6 @@ export function UploadedFilesTable({ files, onEditFAQ, onGenerateFAQ }: Uploaded
             <TableHead className="text-white/70">ID</TableHead>
             <TableHead className="text-white/70">File name</TableHead>
             <TableHead className="text-white/70">Size</TableHead>
-            <TableHead className="text-white/70"></TableHead>
             <TableHead className="text-white/70 text-right">Type</TableHead>
           </TableRow>
         </TableHeader>
@@ -42,18 +41,6 @@ export function UploadedFilesTable({ files, onEditFAQ, onGenerateFAQ }: Uploaded
               <TableCell className="text-white/70">{file.id}</TableCell>
               <TableCell className="font-medium text-white">{file.name}</TableCell>
               <TableCell className="text-white/70">{file.size}</TableCell>
-              <TableCell>
-                <Button
-                  variant="secondary"
-                  className="bg-purple-500/20 hover:bg-purple-500/30 text-purple-300"
-                  onClick={() => file.status === 'generating' 
-                    ? onGenerateFAQ(file.id) 
-                    : onEditFAQ(file.id)
-                  }
-                >
-                  {file.status === 'generating' ? 'Generating FAQ...' : 'Edit FAQ'}
-                </Button>
-              </TableCell>
               <TableCell className="text-right text-white/70">{file.type}</TableCell>
             </TableRow>
           ))}
