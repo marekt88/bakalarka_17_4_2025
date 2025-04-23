@@ -18,11 +18,19 @@ const steps = [
 ]
 
 const voices = [
- { name: 'Piper', description: 'Great for AI agents', color: 'green', gender: 'woman', videoSrc: '/videos/voice-1.mp4' },
- { name: 'Sarah', description: 'Professional and clear', color: 'blue', gender: 'woman', videoSrc: '/videos/voice-2.mp4' },
- { name: 'Frederick Surrey', description: 'Great for audiobooks', color: 'purple', gender: 'man', videoSrc: '/videos/voice-3.mp4' },
- { name: 'Michael', description: 'Warm and friendly', color: 'orange', gender: 'man', videoSrc: '/videos/voice-4.mp4' },
- { name: 'Emma', description: 'Natural and engaging', color: 'pink', gender: 'woman', videoSrc: '/videos/voice-5.mp4' },
+  // Female voices
+  { name: 'Shimmer', description: 'Bright and expressive', color: 'pink', gender: 'woman', audioSrc: '/voices/female/voice_shimmer_333668b9-8c03-44d0-994d-5a77534470dc.mp3' },
+  { name: 'Sage', description: 'Mature and thoughtful', color: 'green', gender: 'woman', audioSrc: '/voices/female/voice_sage_d3c84a9f-e9eb-459c-a17d-1e2a1d320d74.mp3' },
+  { name: 'Nova', description: 'Energetic and clear', color: 'blue', gender: 'woman', audioSrc: '/voices/female/voice_nova_9f8092c4-9a72-4829-abc2-59e86c3eae9a.mp3' },
+  { name: 'Fable', description: 'Warm and storytelling', color: 'purple', gender: 'woman', audioSrc: '/voices/female/voice_fable_f84da1eb-f08c-4b3e-b944-45254cfca119.mp3' },
+  { name: 'Coral', description: 'Soft and soothing', color: 'orange', gender: 'woman', audioSrc: '/voices/female/voice_coral_6a996e91-d871-48fd-b6a8-876ea3d25922.mp3' },
+  { name: 'Alloy', description: 'Balanced and natural', color: 'blue', gender: 'woman', audioSrc: '/voices/female/voice_alloy_c7ed8c89-9754-461a-9356-ba1436ded59e.mp3' },
+  
+  // Male voices
+  { name: 'Onyx', description: 'Deep and authoritative', color: 'purple', gender: 'man', audioSrc: '/voices/male/voice_onyx_51924e96-595a-4158-85f5-cf233e8b5849.mp3' },
+  { name: 'Echo', description: 'Clear and resonant', color: 'blue', gender: 'man', audioSrc: '/voices/male/voice_echo_29d02d73-4425-4419-af17-59bf3bdbfaa0.mp3' },
+  { name: 'Ballad', description: 'Melodic and smooth', color: 'green', gender: 'man', audioSrc: '/voices/male/voice_ballad_73f24e99-a7eb-4c12-8f46-246b3ad52fa2.mp3' },
+  { name: 'Ash', description: 'Warm and friendly', color: 'orange', gender: 'man', audioSrc: '/voices/male/voice_ash_4549eb20-e92c-4a38-9c63-b2d5dbeaacdf.mp3' },
 ]
 
 export default function ChooseVoicePage() {
@@ -31,6 +39,8 @@ export default function ChooseVoicePage() {
  const [assistantName, setAssistantName] = useState('')
  const [filter, setFilter] = useState<'all' | 'man' | 'woman'>('all')
  const [selectedVoice, setSelectedVoice] = useState(voices[0].name)
+ const [isSavingVoice, setIsSavingVoice] = useState(false)
+ const [notification, setNotification] = useState<{type: 'success' | 'error', message: string} | null>(null)
  const { isSaving, showSavePopup, setShowSavePopup, handleSaveChanges } = useSaveChanges()
 
  useEffect(() => {
@@ -40,8 +50,55 @@ export default function ChooseVoicePage() {
    }
  }, [searchParams])
 
- const handleUse = () => {
-   router.push('/load-files')
+ // Clear notification after 5 seconds
+ useEffect(() => {
+   if (notification) {
+     const timer = setTimeout(() => {
+       setNotification(null);
+     }, 5000);
+     return () => clearTimeout(timer);
+   }
+ }, [notification]);
+
+ const handleUse = async () => {
+   try {
+     setIsSavingVoice(true);
+     
+     // Save the selected voice to the backend
+     const response = await fetch('/api/save-voice', {
+       method: 'POST',
+       headers: {
+         'Content-Type': 'application/json',
+       },
+       body: JSON.stringify({ voiceName: selectedVoice }),
+     });
+     
+     if (!response.ok) {
+       throw new Error('Failed to save selected voice');
+     }
+     
+     // Show success message
+     setNotification({
+       type: 'success',
+       message: `${selectedVoice} voice has been selected for your assistant.`
+     });
+     
+     // Navigate to the next page after a short delay
+     setTimeout(() => {
+       router.push('/load-files');
+     }, 1000);
+     
+   } catch (error) {
+     console.error('Error saving voice selection:', error);
+     
+     // Show error message
+     setNotification({
+       type: 'error',
+       message: 'Failed to save voice selection. Please try again.'
+     });
+   } finally {
+     setIsSavingVoice(false);
+   }
  }
 
  return (
@@ -71,6 +128,15 @@ export default function ChooseVoicePage() {
          </Button>
        </div>
      </header>
+
+     {/* Notification */}
+     {notification && (
+       <div className={`fixed top-4 right-4 p-4 rounded-md shadow-lg max-w-sm z-50 transition-opacity duration-300 ${
+         notification.type === 'success' ? 'bg-green-600' : 'bg-red-600'
+       }`}>
+         <p className="text-white">{notification.message}</p>
+       </div>
+     )}
 
      {/* Main Content */}
      <main className="container mx-auto px-4 py-8 space-y-8">
@@ -111,8 +177,12 @@ export default function ChooseVoicePage() {
                </Button>
              </div>
            </div>
-           <Button className="bg-purple-600 hover:bg-purple-700 text-white px-8" onClick={handleUse}>
-             USE
+           <Button 
+             className="bg-purple-600 hover:bg-purple-700 text-white px-8" 
+             onClick={handleUse}
+             disabled={isSavingVoice}
+           >
+             {isSavingVoice ? 'SAVING...' : 'USE'}
            </Button>
          </div>
        </div>

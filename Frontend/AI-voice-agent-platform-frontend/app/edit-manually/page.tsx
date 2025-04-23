@@ -70,7 +70,7 @@ export default function EditManuallyPage() {
 
   const handleOptionToggle = (option: 'test' | 'edit') => {
     if (option === 'test') {
-      router.push('/test-and-refine-with-alice')
+      router.push('/test-and-refine-overview')
     }
     setActiveOption(option)
   }

@@ -69,6 +69,14 @@ def initialize_directories():
     other_dir = transcripts_dir / "other"
     other_dir.mkdir(exist_ok=True)
     
+    # Create generated_agent directory for storing generated assistant transcripts
+    generated_agent_dir = transcripts_dir / "generated_agent"
+    generated_agent_dir.mkdir(exist_ok=True)
+    
+    # Create alice_improvement directory for storing improvement assistant transcripts
+    alice_improvement_dir = transcripts_dir / "alice_improvement"
+    alice_improvement_dir.mkdir(exist_ok=True)
+    
     # Create generated prompts directory
     prompts_dir = base_dir / "generated_prompts"
     prompts_dir.mkdir(exist_ok=True)
@@ -89,6 +97,8 @@ def initialize_directories():
         "landing_dir": landing_dir,
         "onboarding_dir": onboarding_dir,
         "other_dir": other_dir,
+        "generated_agent_dir": generated_agent_dir,
+        "alice_improvement_dir": alice_improvement_dir,
         "prompts_dir": prompts_dir,
         "knowledge_dir": knowledge_dir,
         "rag_index_dir": rag_index_dir
@@ -350,7 +360,15 @@ class TranscriptionAssistant(VoiceAssistant):
             
             # Create appropriate subfolder based on room name
             subfolder = "other"  # Default subfolder
-            if "landing" in self.room_id.lower():
+            
+            # Check if this is a generated assistant transcript
+            if "generated_assistant" in self.room_id.lower() or "your agent" in self.room_id.lower():
+                subfolder = "generated_agent"
+            # Check if this is an improvement assistant transcript
+            elif "improvement" in self.room_id.lower():
+                subfolder = "alice_improvement"
+            # Check other specific room types
+            elif "landing" in self.room_id.lower():
                 subfolder = "landing"
             elif "onboarding" in self.room_id.lower():
                 subfolder = "onboarding"
@@ -359,16 +377,34 @@ class TranscriptionAssistant(VoiceAssistant):
             subfolder_path = transcripts_dir / subfolder
             subfolder_path.mkdir(exist_ok=True)
             
-            # Create filename with room ID and timestamp
-            filename = subfolder_path / f"{self.room_id}_transcript.md"
+            # Create filename with clear timestamp identification
+            timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            # Extract room number if available
+            room_num = None
+            if "_room_" in self.room_id.lower():
+                parts = self.room_id.lower().split("_room_")
+                if len(parts) > 1:
+                    room_num = parts[1].split("_")[0]
+            
+            # Create appropriate filename based on the type of transcript
+            if subfolder == "generated_agent":
+                # Always use a consistent filename format for generated agent transcripts
+                filename = subfolder_path / f"generated_assistant_{timestamp_str}_room_{room_num or 'unknown'}_transcript.md"
+            elif "landing" in self.room_id.lower():
+                filename = subfolder_path / f"alice_landing_{timestamp_str}_room_{room_num or 'unknown'}_transcript.md"
+            elif "onboarding" in self.room_id.lower():
+                filename = subfolder_path / f"alice_onboarding_{timestamp_str}_room_{room_num or 'unknown'}_transcript.md"
+            elif "improvement" in self.room_id.lower():
+                filename = subfolder_path / f"alice_improvement_{timestamp_str}_room_{room_num or 'unknown'}_transcript.md"
+            else:
+                # For all other transcripts
+                filename = subfolder_path / f"{self.room_id}_{timestamp_str}_transcript.md"
             
             # Direct logging of what we're about to process
             print(f"\nDEBUG - TRANSCRIPT DATA BEFORE PROCESSING:")
             print(f"Assistant transcripts: {len(self.transcription_history)}")
             print(f"User transcripts: {len(self.user_transcript_history)}")
-            
-            # Check for any committed speech in the debug logs
-            committed_pattern = '"agent_transcript":'
             
             # Clean up content in transcripts to ensure proper formatting
             cleaned_transcripts = []
@@ -502,7 +538,7 @@ async def create_landingpage_assistant(ctx: JobContext):
         vad=silero.VAD.load(),
         stt=openai.STT(),
         llm=openai.LLM(),
-        tts=openai.TTS(voice="alloy"),  # Using a more formal voice
+        tts=openai.TTS(voice="coral"),  # Using a more formal voice
         chat_ctx=initial_ctx
     )
     
@@ -809,7 +845,7 @@ async def create_landingpage_assistant_with_rag(ctx: JobContext):
         vad=silero.VAD.load(),
         stt=openai.STT(),
         llm=openai.LLM(),
-        tts=openai.TTS(voice="alloy"),  # Using a more formal voice
+        tts=openai.TTS(voice="coral"),  # Using a more formal voice
         chat_ctx=initial_ctx,
         # Add RAG callback before LLM processing
         before_llm_cb=rag_manager.enrich_chat_context
@@ -855,7 +891,7 @@ async def create_landingpage_assistant_with_rag(ctx: JobContext):
     assistant.start(ctx.room)
 
     await asyncio.sleep(1)
-    await assistant.say("Hello, I'm Ava. Welcome to VoiceForge AI! How may I help you today? Feel free to ask me about our AI voice agent platform or any specific AI services.", allow_interruptions=True)
+    await assistant.say("Hello, I'm Coral. Hexagonal structures frequently appear in nature, from snowflakes to honeycombs.", allow_interruptions=False)
     
     @ctx.room.on("message")
     def on_message(message):
@@ -986,11 +1022,19 @@ async def create_onboarding_assistant_with_rag(ctx: JobContext):
             print(f"Error in message handler: {e}")
 
 async def create_generated_assistant(ctx: JobContext):
-    """Create a simple helpful assistant."""
+    """Create an assistant using the dynamically generated prompt from transcripts."""
+    # Load the latest generated prompt
+    prompt_content = load_generated_prompt()
+    
+    # Load the first message
+    first_message = load_first_message()
+    
+    # Create chat context with the loaded prompt
     initial_ctx = llm.ChatContext().append(
         role="system",
-        text="You are a helpful assistant."
+        text=prompt_content
     )
+    
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
     # Use TranscriptionAssistant for consistent handling
@@ -1042,9 +1086,171 @@ async def create_generated_assistant(ctx: JobContext):
     assistant.start(ctx.room)
 
     await asyncio.sleep(1)
-    await assistant.say("Hello, I'm your helpful assistant. How may I assist you today?", allow_interruptions=True)
+    # Use the dynamically generated first message instead of the static greeting
+    await assistant.say(first_message, allow_interruptions=True)
     
     # Add message handling for debugging
+    @ctx.room.on("message")
+    def on_message(message):
+        """Capture any pipeline messages for debugging."""
+        try:
+            if isinstance(message, str) and '"agent_transcript":' in message:
+                print(f"\nDEBUG - CAPTURED MESSAGE: {message[:100]}...")
+                
+                try:
+                    msg_data = json.loads(message)
+                    if "agent_transcript" in msg_data:
+                        transcript = msg_data["agent_transcript"]
+                        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        assistant.transcription_history.append({
+                            "timestamp": timestamp,
+                            "speaker": "ASSISTANT",
+                            "text": transcript
+                        })
+                        print(f"\nASSISTANT PIPELINE TRANSCRIPT SAVED: {transcript}")
+                except Exception as e:
+                    print(f"Error parsing message: {e}")
+        except Exception as e:
+            print(f"Error in message handler: {e}")
+
+def load_generated_prompt():
+    """Load the latest generated prompt from the generated_prompts folder."""
+    try:
+        # Path to the standard prompt file
+        base_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+        prompt_file = base_dir / "generated_prompts" / "current_voice_agent_prompt.md"
+        
+        if (prompt_file.exists()):
+            with open(prompt_file, "r", encoding="utf-8") as f:
+                prompt_content = f.read()
+                
+            print(f"Successfully loaded the generated prompt from {prompt_file}")
+            return prompt_content
+        else:
+            print(f"No generated prompt file found at {prompt_file}. Using default prompt.")
+            return "You are a helpful assistant."
+    except Exception as e:
+        print(f"Error loading generated prompt: {e}")
+        return "You are a helpful assistant."
+
+def load_first_message():
+    """Load the first message from the generated_prompts folder."""
+    try:
+        # Path to the first message file
+        base_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+        message_file = base_dir / "generated_prompts" / "first_message.txt"
+        
+        if message_file.exists():
+            with open(message_file, "r", encoding="utf-8") as f:
+                message_content = f.read().strip()
+                
+            print(f"Successfully loaded the first message from {message_file}")
+            return message_content
+        else:
+            print(f"No first message file found at {message_file}. Using default greeting.")
+            return "Hello, I'm your assistant based on your configuration. How may I assist you today?"
+    except Exception as e:
+        print(f"Error loading first message: {e}")
+        return "Hello, I'm your assistant based on your configuration. How may I assist you today?"
+
+async def create_improvement_assistant(ctx: JobContext):
+    # Find the most recent generated agent transcript
+    try:
+        base_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+        generated_agent_dir = base_dir / "transcripts" / "generated_agent"
+        
+        # Get the most recent transcript file
+        transcript_files = list(generated_agent_dir.glob("*.md"))
+        if not transcript_files:
+            print("WARNING: No generated agent transcripts found")
+            transcript_content = "No previous agent conversation available."
+        else:
+            # Sort by modification time and get the latest
+            latest_transcript = max(transcript_files, key=lambda f: f.stat().st_mtime)
+            with open(latest_transcript, "r", encoding="utf-8") as f:
+                transcript_content = f.read()
+            print(f"Found transcript: {latest_transcript.name}")
+    except Exception as e:
+        print(f"Error loading transcript: {e}")
+        transcript_content = "Error loading previous agent conversation."
+
+    initial_ctx = llm.ChatContext().append(
+        role="system",
+        text=(
+            "## Identity & Purpose\n"
+            "You are Alice, an AI Assistant from VoiceForge AI. Your purpose is to gather feedback from users about their existing voice agent, understand the desired changes, confirm them concisely, and then **apply those changes directly to the agent's configuration using connected tools.** You have access to the transcript from their current agent to help understand the context of their feedback.\n\n"
+            "## Voice & Persona\n"
+            "- **Personality:** Be helpful, efficient, and supportive. Your primary goal is to understand the user's feedback clearly and confirm you can act on it. Maintain an encouraging and collaborative tone.\n"
+            "- **Speech Characteristics:** Speak clearly and concisely. Use professional but accessible language. Be direct and brief when confirming changes and stating your next action.\n\n"
+            "## Core Task & Interaction Guidelines\n"
+            "1. **Initiate Feedback:** Begin by acknowledging you have the agent's transcript (see below) and ask the user what specific changes or improvements they'd like to make.\n"
+            "2. **Gather Specifics:** Listen carefully to the user's feedback. Ask clarifying questions *only if necessary* to understand the exact changes desired (e.g., \"Okay, you want the tone to be more casual?\"). Focus on capturing *what* they want changed.\n"
+            "3. **Concise Confirmation:** Once you understand a requested change or a set of changes, repeat them back to the user in a **very short and concise manner** for confirmation.\n"
+            "   * *Example:* \"Okay, summarizing: shorter answers, more empathetic tone, and add knowledge about weekend hours.\"\n"
+            "4. **State Action:** Immediately after confirming the changes, state clearly that you will now apply them.\n"
+            "   * *Example:* \"Got it. I will make those changes to the agent now.\"\n"
+            "5. **Confirm Capability (Crucial):** If the user asks *if* you can make these changes, or expresses doubt, respond affirmatively and confidently.\n"
+            "   * *Example Response:* \"**Yes, I can make those changes directly to the agent's configuration based on your feedback.**\"\n"
+            "6. **Use Transcript for Context:** Refer to the transcript below to understand the user's points, but avoid lengthy analysis unless the user specifically asks for it. The focus is on capturing *their* desired changes.\n\n"
+            "## Transcript from Current Agent\n\n"
+            f"{transcript_content}\n\n"
+            "Use this transcript as context when discussing the user's feedback."
+        ),
+    )
+    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+
+    # Use TranscriptionAssistant instead of VoiceAssistant
+    assistant = TranscriptionAssistant(
+        vad=silero.VAD.load(),
+        stt=openai.STT(),
+        llm=openai.LLM(),
+        tts=openai.TTS(voice="nova"),  # Using a professional, supportive voice
+        chat_ctx=initial_ctx
+    )
+    
+    # Set room ID for transcript filename
+    if ctx.room and ctx.room.name:
+        assistant.set_room_id(ctx.room.name)
+    
+    # Register cleanup handlers to explicitly save transcript before disconnect
+    @ctx.room.on("disconnected")
+    def on_disconnected():
+        print("Room disconnected, saving transcript...")
+        # Force the transcript to be saved
+        file_path = assistant.save_transcript_to_file()
+        print(f"Transcript saved to: {file_path}")
+    
+    # Also register for participant disconnections to catch client leaving
+    @ctx.room.on("participant_disconnected")
+    def on_participant_disconnected(participant):
+        print(f"Participant {participant.identity} disconnected, saving transcript...")
+        file_path = assistant.save_transcript_to_file()
+        print(f"Transcript saved to: {file_path}")
+    
+    # Monitor server shutdowns as well - use proper connection state checking
+    @ctx.room.on("connection_state_changed")
+    def on_connection_state_changed(state):
+        # Check if state is int or enum
+        try:
+            if isinstance(state, int) and state == 0:  # Assuming 0 means disconnected
+                print("Connection state changed to DISCONNECTED (int value), saving transcript...")
+                file_path = assistant.save_transcript_to_file()
+                print(f"Transcript saved to: {file_path}")
+            elif hasattr(state, 'name') and state.name == "DISCONNECTED":
+                print("Connection state changed to DISCONNECTED (enum), saving transcript...")
+                file_path = assistant.save_transcript_to_file()
+                print(f"Transcript saved to: {file_path}")
+        except Exception as e:
+            print(f"Error in connection_state_changed handler: {e}")
+            # Try to save transcript anyway
+            assistant.save_transcript_to_file()
+    
+    assistant.start(ctx.room)
+
+    await asyncio.sleep(1)
+    await assistant.say("Hi there! I'm Alice, your AI improvement consultant. I've reviewed the conversation with your current AI voice agent, and I'm here to help you refine and enhance it. What specific aspects of your agent would you like to improve?", allow_interruptions=True)
+    
+    # Add message handling for improvement assistant
     @ctx.room.on("message")
     def on_message(message):
         """Capture any pipeline messages for debugging."""
@@ -1099,12 +1305,15 @@ async def entrypoint(ctx: JobContext):
     elif "generated_assistant" in room_name.lower():
         print("Starting generated helpful assistant")
         await create_generated_assistant(ctx)
+    elif "improvement" in room_name.lower():
+        print("Starting improvement assistant")
+        await create_improvement_assistant(ctx)
     else:
         # Check if RAG is enabled for default case
         rag_enabled = init_rag_system()
         
         # Default to landing page assistant with RAG if available
-        if rag_enabled:
+        if (rag_enabled):
             print("Starting default landing page assistant WITH RAG support")
             await create_landingpage_assistant_with_rag(ctx)
         else:

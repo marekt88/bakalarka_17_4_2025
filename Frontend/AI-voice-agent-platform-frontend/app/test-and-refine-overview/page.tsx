@@ -91,23 +91,39 @@ export default function TestAndRefineOverviewPage() {
       <main className="container mx-auto px-4 py-8 space-y-8">
         {showProgress && <ProgressSteps steps={steps} />}
         
-        <div className="max-w-4xl mx-auto space-y-8">
+        <div className="max-w-6xl mx-auto space-y-8">
           <div>
             <h1 className="text-3xl font-bold">Test and refine your assistant</h1>
           </div>
 
           <ToggleButtons activeOption={activeOption} onToggle={handleOptionToggle} />
 
-          {/* Replace the VoiceAgentInterface with UnifiedVoiceAgent */}
-          <div className="p-6 border border-white/10 rounded-lg bg-white/5">
-            <h2 className="text-xl font-semibold mb-6">Test with your assistant</h2>
+          {/* Display both assistants side by side */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Generated Assistant (Left) */}
+            <div className="p-6 border border-white/10 rounded-lg bg-white/5">
+              <h2 className="text-xl font-semibold mb-6">Test with your generated assistant</h2>
+              
+              <UnifiedVoiceAgent
+                assistantName="YOUR AGENT"
+                assistantType="generated_assistant"
+                className="max-w-full mx-auto"
+              />
+            </div>
             
-            {/* Renamed simple helpful assistant using UnifiedVoiceAgent */}
-            <UnifiedVoiceAgent
-              assistantName="YOUR AGENT"
-              assistantType="generated_assistant"
-              className="max-w-full mx-auto"
-            />
+            {/* Improvement Assistant (Right) - Replacing Landing Assistant */}
+            <div className="p-6 border border-white/10 rounded-lg bg-white/5">
+              <h2 className="text-xl font-semibold mb-6">Provide feedback with Alice</h2>
+              <p className="text-white/70 mb-4 text-sm">
+                Alice will help you identify improvements for your agent based on your conversation history
+              </p>
+              
+              <UnifiedVoiceAgent
+                assistantName="ALICE"
+                assistantType="improvement"
+                className="max-w-full mx-auto"
+              />
+            </div>
           </div>
         </div>
       </main>
