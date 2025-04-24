@@ -2,10 +2,42 @@ import enum
 from typing import Annotated
 from livekit.agents import llm
 import logging
+from flask import Flask, jsonify, request
+from knowledge_indexer import run_indexer
+from rag_manager import rag_manager
+import os
+from flask_cors import CORS
+
+app = Flask(__name__)
+CORS(app)  # Enable CORS for all routes
 
 logger = logging.getLogger("temperature-control")
 logger.setLevel(logging.INFO)
 
+# API endpoint to process knowledgebase files
+@app.route('/api/process-knowledgebase', methods=['POST'])
+def process_knowledgebase():
+    try:
+        # Run the RAG indexer to process knowledgebase files
+        updated = run_indexer()
+        
+        if updated:
+            # Reload the RAG manager with new data
+            rag_manager.load()
+            return jsonify({
+                "success": True,
+                "message": "Knowledge base updated successfully!"
+            }), 200
+        else:
+            return jsonify({
+                "success": True,
+                "message": "No new knowledge files found to process."
+            }), 200
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"Error processing knowledge base: {str(e)}"
+        }), 500
 
 class Zone(enum.Enum):
     LIVING_ROOM = "living_room"

@@ -1029,10 +1029,18 @@ async def create_generated_assistant(ctx: JobContext):
     # Load the first message
     first_message = load_first_message()
     
+    # Load the selected voice from file
+    selected_voice = load_selected_voice()
+    
     # Create chat context with the loaded prompt
     initial_ctx = llm.ChatContext().append(
         role="system",
-        text=prompt_content
+        text=prompt_content + "\n\n## Knowledge Context\n"
+        "You have been equipped with a knowledge base that can provide additional context to help answer user questions. "
+        "When users ask questions that might be addressed in the knowledge base, relevant information will be provided to you. "
+        "Use this information to give specific and accurate answers while maintaining the persona and communication style defined above. "
+        "If the provided context doesn't fully address the user's question, acknowledge what you know from the context and what might "
+        "require additional information."
     )
     
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
@@ -1042,8 +1050,10 @@ async def create_generated_assistant(ctx: JobContext):
         vad=silero.VAD.load(),
         stt=openai.STT(),
         llm=openai.LLM(),
-        tts=openai.TTS(voice="echo"),  # Using echo voice
-        chat_ctx=initial_ctx
+        tts=openai.TTS(voice=selected_voice),  # Using the selected voice from the file
+        chat_ctx=initial_ctx,
+        # Add RAG callback before LLM processing
+        before_llm_cb=rag_manager.enrich_chat_context
     )
     
     # Set room ID for transcript filename
@@ -1152,6 +1162,43 @@ def load_first_message():
     except Exception as e:
         print(f"Error loading first message: {e}")
         return "Hello, I'm your assistant based on your configuration. How may I assist you today?"
+
+def load_selected_voice():
+    """Load the selected voice from the assistant_setup folder and ensure it's valid."""
+    # List of supported OpenAI TTS voices (all lowercase)
+    supported_voices = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer', 
+                        'coral', 'verse', 'ballad', 'ash', 'sage']
+    default_voice = "echo"
+    
+    try:
+        # Path to the selected voice file
+        base_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+        voice_file = base_dir / "assistant_setup" / "selected_voice.txt"
+        
+        if voice_file.exists():
+            with open(voice_file, "r", encoding="utf-8") as f:
+                voice_content = f.read().strip().lower()  # Convert to lowercase
+                
+            # Validate that the voice is supported
+            if voice_content in supported_voices:
+                print(f"Successfully loaded the selected voice from {voice_file}: '{voice_content}'")
+                return voice_content
+            else:
+                print(f"Warning: Voice '{voice_content}' in {voice_file} is not supported. Using default voice '{default_voice}'.")
+                # Update the file with the default voice to prevent future errors
+                with open(voice_file, "w", encoding="utf-8") as f:
+                    f.write(default_voice)
+                return default_voice
+        else:
+            print(f"No selected voice file found at {voice_file}. Using default voice '{default_voice}'.")
+            # Create the file with the default voice
+            voice_file.parent.mkdir(exist_ok=True)
+            with open(voice_file, "w", encoding="utf-8") as f:
+                f.write(default_voice)
+            return default_voice
+    except Exception as e:
+        print(f"Error loading selected voice: {e}")
+        return default_voice
 
 async def create_improvement_assistant(ctx: JobContext):
     # Find the most recent generated agent transcript
@@ -1335,4 +1382,16 @@ if __name__ == "__main__":
     # Start the transcript processor in the background
     transcript_processor_task = start_transcript_processor()
     
+    # Start the Flask API server in a separate thread
+    import threading
+    from api import app as flask_app
+    
+    def run_flask_app():
+        flask_app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+    
+    flask_thread = threading.Thread(target=run_flask_app, daemon=True)
+    flask_thread.start()
+    print("Flask API server started on port 5000")
+    
+    # Run the LiveKit server
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))

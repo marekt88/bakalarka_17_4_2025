@@ -1,1 +1,1 @@
-Hello! I'm your new AI voice assistant, here to help you with whatever you need. Let's get started!
+Hello, I'm David, your onboarding agent. Could you please tell me your name, share a bit about your business, and what you'd like to automate? This will help us prepare for our meeting.

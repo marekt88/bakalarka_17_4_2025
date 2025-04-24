@@ -1,4 +1,1 @@
-C:\Users\marek\Desktop\3.rocnik 1.semester\Bakalarka\AI-voice-assistant-youtube-1\Backend\knowledgebase\Web widget dokumentácia - hlasový asistent.pdf
-C:\Users\marek\Desktop\3.rocnik 1.semester\Bakalarka\AI-voice-assistant-youtube-1\Backend\knowledgebase\impofai_info.txt
-C:\Users\marek\Desktop\3.rocnik 1.semester\Bakalarka\AI-voice-assistant-youtube-1\Backend\knowledgebase\dokumentacia.pdf
 C:\Users\marek\Desktop\3.rocnik 1.semester\Bakalarka\AI-voice-assistant-youtube-1\Backend\knowledgebase\manual pre systemovu integraciu sds rest api.pdf
