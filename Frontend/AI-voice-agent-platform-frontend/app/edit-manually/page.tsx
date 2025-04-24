@@ -15,23 +15,71 @@ import {
 import { ToggleButtons } from '@/components/toggle-buttons'
 import { SettingsSlider } from '@/components/settings-slider'
 import { SettingsToggle } from '@/components/settings-toggle'
-import { Grid, Save, Mic, FileText, Zap } from 'lucide-react'
+import { Grid, Save, Mic, FileText, Zap, ChevronDown, Play } from 'lucide-react'
 import { TestMicrophoneButton } from '@/components/test-microphone-button'
 import { SaveChangesPopup } from '@/components/save-changes-popup'
 import { useSaveChanges } from '@/hooks/use-save-changes'
+import { UnifiedVoiceAgent } from '@/components/UnifiedVoiceAgent'
 
 // Sample function to fetch assistant configuration
 const fetchAssistantConfig = async (id: string) => {
-  // In a real application, this would be an API call
-  return {
-    name: 'Sample Assistant',
-    prompt: 'This is a sample prompt for the assistant.',
-    temperature: 0.7,
-    waitSeconds: 0.5,
-    onPunctuationSeconds: 0.2,
-    onNoPunctuationSeconds: 1.0,
-    smartEndpointing: true,
-    detectEmotion: false,
+  try {
+    // Fetch the prompt content from the file
+    const promptResponse = await fetch('/api/get-prompt-content');
+    const promptData = await promptResponse.json();
+    
+    // Fetch the first message content from the file
+    const firstMessageResponse = await fetch('/api/get-first-message');
+    const firstMessageData = await firstMessageResponse.json();
+    
+    return {
+      name: 'Voice Agent',
+      prompt: promptData.content || 'This is a sample prompt for the assistant.',
+      firstMessage: firstMessageData.content || '',
+      waitSeconds: 0.5,
+      onPunctuationSeconds: 0.2,
+      onNoPunctuationSeconds: 1.0,
+      smartEndpointing: true,
+    }
+  } catch (error) {
+    console.error('Error fetching data:', error);
+    return {
+      name: 'Sample Assistant',
+      prompt: 'This is a sample prompt for the assistant.',
+      firstMessage: '',
+      waitSeconds: 0.5,
+      onPunctuationSeconds: 0.2,
+      onNoPunctuationSeconds: 1.0,
+      smartEndpointing: true,
+    }
+  }
+}
+
+// Function to save prompt and first message back to files
+const savePromptAndFirstMessage = async (prompt: string, firstMessage: string) => {
+  try {
+    // Save the prompt content
+    const promptSaveResponse = await fetch('/api/save-prompt-content', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ content: prompt }),
+    });
+    
+    // Save the first message content
+    const firstMessageSaveResponse = await fetch('/api/save-first-message', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ content: firstMessage }),
+    });
+    
+    return promptSaveResponse.ok && firstMessageSaveResponse.ok;
+  } catch (error) {
+    console.error('Error saving data:', error);
+    return false;
   }
 }
 
@@ -41,31 +89,24 @@ export default function EditManuallyPage() {
   const { isSaving, showSavePopup, setShowSavePopup, handleSaveChanges } = useSaveChanges()
   const [activeOption, setActiveOption] = useState<'test' | 'edit'>('edit')
   const [isRecording, setIsRecording] = useState(false)
+  const [showTestSection, setShowTestSection] = useState(false)
   
   // Form state
   const [assistantName, setAssistantName] = useState('')
   const [prompt, setPrompt] = useState('')
-  const [temperature, setTemperature] = useState([0.7])
-  const [waitSeconds, setWaitSeconds] = useState([0.4])
-  const [onPunctuationSeconds, setOnPunctuationSeconds] = useState([0.1])
-  const [onNoPunctuationSeconds, setOnNoPunctuationSeconds] = useState([1.5])
-  const [smartEndpointing, setSmartEndpointing] = useState(true)
-  const [detectEmotion, setDetectEmotion] = useState(true)
+  const [firstMessage, setFirstMessage] = useState('')
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle')
 
   useEffect(() => {
     const assistantId = searchParams?.get('id')
-    if (assistantId) {
-      fetchAssistantConfig(assistantId).then((config) => {
-        setAssistantName(config.name)
-        setPrompt(config.prompt)
-        setTemperature([config.temperature])
-        setWaitSeconds([config.waitSeconds])
-        setOnPunctuationSeconds([config.onPunctuationSeconds])
-        setOnNoPunctuationSeconds([config.onNoPunctuationSeconds])
-        setSmartEndpointing(config.smartEndpointing)
-        setDetectEmotion(config.detectEmotion)
-      })
-    }
+    // Load data regardless of whether we have an ID or not
+    fetchAssistantConfig(assistantId || '').then((config) => {
+      setAssistantName(config.name)
+      setPrompt(config.prompt)
+      setFirstMessage(config.firstMessage || '')
+    }).catch(error => {
+      console.error('Error loading configuration:', error);
+    })
   }, [searchParams])
 
   const handleOptionToggle = (option: 'test' | 'edit') => {
@@ -73,6 +114,24 @@ export default function EditManuallyPage() {
       router.push('/test-and-refine-overview')
     }
     setActiveOption(option)
+  }
+
+  // Custom save function to save both prompt and first message
+  const handleSavePromptAndMessage = async () => {
+    try {
+      setSaveStatus('saving');
+      const success = await savePromptAndFirstMessage(prompt, firstMessage);
+      if (success) {
+        setSaveStatus('success');
+        // Reset status after a delay
+        setTimeout(() => setSaveStatus('idle'), 2000);
+      } else {
+        setSaveStatus('error');
+      }
+    } catch (error) {
+      console.error('Error saving changes:', error);
+      setSaveStatus('error');
+    }
   }
 
   const handleMicrophoneClick = async () => {
@@ -122,12 +181,18 @@ export default function EditManuallyPage() {
           </div>
           <Button 
             variant="outline" 
-            className="gap-2 text-black border-green-500 bg-green-500/50 hover:bg-green-600/50 hover:text-black"
-            onClick={handleSaveChanges}
-            disabled={isSaving}
+            className={`gap-2 ${
+              saveStatus === 'success'
+                ? 'text-black border-green-600 bg-green-600/50 hover:bg-green-600/50 hover:text-black'
+                : saveStatus === 'error'
+                ? 'text-white border-red-500 bg-red-500/50 hover:bg-red-500/50'
+                : 'text-black border-green-500 bg-green-500/50 hover:bg-green-600/50 hover:text-black'
+            }`}
+            onClick={handleSavePromptAndMessage}
+            disabled={saveStatus === 'saving'}
           >
             <Save className="w-4 h-4" />
-            {isSaving ? 'Saving...' : 'Save changes'}
+            {saveStatus === 'saving' ? 'Saving...' : 'Save changes'}
           </Button>
         </div>
       </header>
@@ -143,7 +208,7 @@ export default function EditManuallyPage() {
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             {/* Prompt Section */}
-            <div className="lg:col-span-2 space-y-4">
+            <div className="lg:col-span-2 space-y-6">
               <div className="space-y-4">
                 <h2 className="text-sm font-medium text-white/70">PROMPT</h2>
                 <Textarea
@@ -152,49 +217,37 @@ export default function EditManuallyPage() {
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
                 />
-                <Button className="bg-green-500 hover:bg-green-600">
-                  Save
-                </Button>
               </div>
 
-              {/* Timing Settings */}
-              <div className="space-y-4 bg-black/20 p-4 rounded-lg">
-                <SettingsSlider
-                  label="Wait seconds"
-                  tooltip="This is how long assistant waits before speaking."
-                  min={0}
-                  max={2}
-                  value={waitSeconds}
-                  onChange={setWaitSeconds}
-                  unit=" (sec)"
+              <div className="space-y-4">
+                <h2 className="text-sm font-medium text-white/70">FIRST MESSAGE</h2>
+                <Textarea
+                  className="min-h-[100px] bg-black/20 border-white/10 resize-none"
+                  placeholder="Enter the first message the assistant will say..."
+                  value={firstMessage}
+                  onChange={(e) => setFirstMessage(e.target.value)}
                 />
-                
-                <SettingsToggle
-                  label="Smart Endpointing"
-                  tooltip="Enable for more accurate speech endpoint detection."
-                  checked={smartEndpointing}
-                  onCheckedChange={setSmartEndpointing}
-                />
-
-                <SettingsSlider
-                  label="On Punctuation Seconds"
-                  tooltip="Minimum seconds to wait after transcription ending with punctuation."
-                  min={0}
-                  max={3}
-                  value={onPunctuationSeconds}
-                  onChange={setOnPunctuationSeconds}
-                  unit=" (sec)"
-                />
-
-                <SettingsSlider
-                  label="On No Punctuation Seconds"
-                  tooltip="Minimum seconds to wait after transcription ending without punctuation."
-                  min={0}
-                  max={3}
-                  value={onNoPunctuationSeconds}
-                  onChange={setOnNoPunctuationSeconds}
-                  unit=" (sec)"
-                />
+                <div className="flex items-center gap-3">
+                  <Button 
+                    className={`${
+                      saveStatus === 'success' 
+                        ? 'bg-green-600 hover:bg-green-700' 
+                        : saveStatus === 'error'
+                        ? 'bg-red-500 hover:bg-red-600'
+                        : 'bg-green-500 hover:bg-green-600'
+                    }`}
+                    onClick={handleSavePromptAndMessage}
+                    disabled={saveStatus === 'saving'}
+                  >
+                    {saveStatus === 'saving' ? 'Saving...' : 'Save'}
+                  </Button>
+                  {saveStatus === 'success' && (
+                    <span className="text-green-500">Changes saved successfully!</span>
+                  )}
+                  {saveStatus === 'error' && (
+                    <span className="text-red-500">Error saving changes. Please try again.</span>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -204,8 +257,8 @@ export default function EditManuallyPage() {
                 <div className="space-y-2">
                   <label className="text-sm text-white/70">Provider</label>
                   <Select defaultValue="openai">
-                    <SelectTrigger>
-                      <SelectValue />
+                    <SelectTrigger className="bg-white text-black">
+                      <SelectValue placeholder="openai" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="openai">openai</SelectItem>
@@ -215,63 +268,55 @@ export default function EditManuallyPage() {
 
                 <div className="space-y-2">
                   <label className="text-sm text-white/70">Model</label>
-                  <Select defaultValue="gpt-4o-mini">
-                    <SelectTrigger>
-                      <SelectValue />
+                  <Select defaultValue="gpt-4o">
+                    <SelectTrigger className="bg-white text-black">
+                      <SelectValue placeholder="gpt-4o" />
                     </SelectTrigger>
                     <SelectContent>
+                      <SelectItem value="gpt-4o">gpt-4o</SelectItem>
                       <SelectItem value="gpt-4o-mini">gpt-4o-mini</SelectItem>
+                      <SelectItem value="gpt-4-turbo">gpt-4-turbo</SelectItem>
+                      <SelectItem value="gpt-4.1">gpt-4.1</SelectItem>
+                      <SelectItem value="gpt-4">gpt-4</SelectItem>
+                      <SelectItem value="gpt-3.5-turbo">gpt-3.5-turbo</SelectItem>
+                      <SelectItem value="o1">o1</SelectItem>
+                      <SelectItem value="o3">o3</SelectItem>
+                      <SelectItem value="o3-mini">o3-mini</SelectItem>
+                      <SelectItem value="o4-mini">o4-mini</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm text-white/70">Knowledge Base</label>
-                  <Select>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select Files" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="file1">File 1</SelectItem>
-                      <SelectItem value="file2">File 2</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <SettingsSlider
-                  label="Temperature"
-                  tooltip="Controls randomness in the output"
-                  min={0}
-                  max={2}
-                  value={temperature}
-                  onChange={setTemperature}
-                />
-
-                <div className="space-y-2">
-                  <label className="text-sm text-white/70">Max Tokens</label>
-                  <input
-                    type="number"
-                    defaultValue={250}
-                    className="w-full bg-black/20 border border-white/10 rounded-md p-2"
-                  />
-                </div>
-
-                <SettingsToggle
-                  label="Detect Emotion"
-                  checked={detectEmotion}
-                  onCheckedChange={setDetectEmotion}
-                />
-              </div>
-
-              <div className="flex flex-col items-center gap-4">
-                <TestMicrophoneButton
-                  isRecording={isRecording}
-                  onClick={handleMicrophoneClick}
-                />
-                <span className="text-sm text-white/70">TEST HERE</span>
               </div>
             </div>
           </div>
+
+          {/* Test Agent Toggle Button */}
+          <div className="w-full flex justify-start mt-8">
+            <Button
+              className="bg-purple-600 hover:bg-purple-700 gap-2"
+              onClick={() => setShowTestSection(!showTestSection)}
+            >
+              <Play className="w-4 h-4" />
+              {showTestSection ? 'Hide Test Interface' : 'Test Your Agent'}
+            </Button>
+          </div>
+
+          {/* Test Agent Section */}
+          {showTestSection && (
+            <div className="mt-8 p-6 border border-white/10 rounded-lg bg-white/5 transition-all duration-300">
+              <h2 className="text-xl font-semibold mb-4">Test Your Generated Agent</h2>
+              <p className="text-white/70 mb-6">
+                Talk to your voice agent with the current prompt and settings to test how it will respond.
+                Make sure to save your changes before testing to use the latest versions of your prompt and first message.
+              </p>
+              
+              <UnifiedVoiceAgent
+                assistantName="YOUR AGENT"
+                assistantType="generated_assistant"
+                className="max-w-md mx-auto"
+              />
+            </div>
+          )}
         </div>
       </main>
 
