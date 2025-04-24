@@ -136,6 +136,8 @@ async def process_knowledge_file(file_path, idx_builder, paragraphs_by_uuid, htt
 
 async def main():
     """Process all knowledge base files and build vector database."""
+    global PDF_SUPPORT  # Move global declaration to the beginning of the function
+    
     # Check if pypdf is installed for PDF support
     if not PDF_SUPPORT:
         try:
@@ -144,7 +146,6 @@ async def main():
             from subprocess import check_call
             check_call(["pip", "install", "pypdf"])
             from pypdf import PdfReader
-            global PDF_SUPPORT
             PDF_SUPPORT = True
             print("Successfully installed pypdf for PDF support")
         except Exception as e:
