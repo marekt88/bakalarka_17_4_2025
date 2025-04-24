@@ -18,6 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { useProgressIndicator } from "@/hooks/use-progress-indicator"
 
 interface CreateAssistantModalProps {
   isOpen: boolean;
@@ -28,11 +29,14 @@ export function CreateAssistantModal({ isOpen, onClose }: CreateAssistantModalPr
   const router = useRouter()
   const [assistantName, setAssistantName] = useState('')
   const [language, setLanguage] = useState('en')
+  const { resetProgressIndicator } = useProgressIndicator()
 
   if (!isOpen) return null;
 
   const handleContinue = () => {
     if (assistantName) {
+      // Reset the progress indicator when creating a new assistant
+      resetProgressIndicator();
       router.push(`/choose-voice?name=${encodeURIComponent(assistantName)}`)
       onClose()
     }

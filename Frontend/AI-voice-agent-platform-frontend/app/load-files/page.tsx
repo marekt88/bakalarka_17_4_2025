@@ -10,6 +10,8 @@ import { UploadedFilesTable } from '@/components/uploaded-files-table'
 import { useRouter } from 'next/navigation'
 import { useSaveChanges } from '@/hooks/use-save-changes'
 import { SaveChangesPopup } from '@/components/save-changes-popup'
+import { NavigationBar } from '@/components/NavigationBar'
+import { useProgressIndicator } from '@/hooks/use-progress-indicator'
 
 const steps = [
   { number: 1, title: 'Choose a voice' },
@@ -30,6 +32,7 @@ interface UploadedFile {
 
 export default function LoadFilesPage() {
   const router = useRouter()
+  const { showProgressIndicator } = useProgressIndicator()
   const [files, setFiles] = useState<UploadedFile[]>([])
   const [isProcessing, setIsProcessing] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
@@ -181,13 +184,7 @@ export default function LoadFilesPage() {
       {/* Header */}
       <header className="border-b border-white/10">
         <div className="container mx-auto px-4 h-16 flex items-center justify-between">
-          <Link
-            href="/choose-voice"
-            className="flex items-center gap-2 text-sm text-white/70 hover:text-white"
-          >
-            <Grid className="w-4 h-4" />
-            Back to voice selection
-          </Link>
+          <NavigationBar />
           <Button 
             variant="outline" 
             className="gap-2 text-black border-green-500 bg-green-500/50 hover:bg-green-600/50 hover:text-black"
@@ -202,7 +199,7 @@ export default function LoadFilesPage() {
 
       {/* Main Content */}
       <main className="container mx-auto px-4 py-8 space-y-8">
-        <ProgressSteps steps={steps} />
+        {!showProgressIndicator ? null : <ProgressSteps steps={steps} />}
         
         <div className="max-w-4xl mx-auto space-y-8">
           <div>

@@ -10,6 +10,8 @@ import { Grid, Save, Mic, FileText } from 'lucide-react'
 import { SaveChangesPopup } from '@/components/save-changes-popup'
 import { useSaveChanges } from '@/hooks/use-save-changes'
 import { UnifiedVoiceAgent } from '@/components/UnifiedVoiceAgent'
+import { NavigationBar } from '@/components/NavigationBar'
+import { useProgressIndicator } from '@/hooks/use-progress-indicator'
 
 const steps = [
   { number: 1, title: 'Choose a voice' },
@@ -20,17 +22,14 @@ const steps = [
 
 export default function TestAndRefineOverviewPage() {
   const router = useRouter()
-  const [showProgress, setShowProgress] = useState(true)
+  const { showProgressIndicator, setupAutoHide } = useProgressIndicator()
   const [activeOption, setActiveOption] = useState<'test' | 'edit'>('test')
   const { isSaving, showSavePopup, setShowSavePopup, handleSaveChanges } = useSaveChanges()
 
+  // Setup auto-hide for the progress indicator after 5 seconds
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setShowProgress(false)
-    }, 3000)
-
-    return () => clearTimeout(timer)
-  }, [])
+    return setupAutoHide(5000);
+  }, [setupAutoHide]);
 
   const handleOptionToggle = (option: 'test' | 'edit') => {
     if (option === 'edit') {
@@ -48,33 +47,17 @@ export default function TestAndRefineOverviewPage() {
       {/* Header */}
       <header className="border-b border-white/10">
         <div className="container mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Link
-              href="/"
-              className="flex items-center gap-2 text-sm text-white/70 hover:text-white"
-            >
-              <Grid className="w-4 h-4" />
-              Back to dashboard
-            </Link>
-            {!showProgress && (
-              <>
-                <Link
-                  href="/choose-voice"
-                  className="flex items-center gap-2 text-sm text-white/70 hover:text-white"
-                >
-                  <Mic className="w-4 h-4" />
-                  Change voice
-                </Link>
-                <Link
-                  href="/load-files"
-                  className="flex items-center gap-2 text-sm text-white/70 hover:text-white"
-                >
-                  <FileText className="w-4 h-4" />
-                  Edit files
-                </Link>
-              </>
-            )}
-          </div>
+          {!showProgressIndicator ? <NavigationBar /> : (
+            <div className="flex items-center gap-4">
+              <Link
+                href="/"
+                className="flex items-center gap-2 text-sm text-white/70 hover:text-white"
+              >
+                <Grid className="w-4 h-4" />
+                Back to dashboard
+              </Link>
+            </div>
+          )}
           <Button 
             variant="outline" 
             className="gap-2 text-black border-green-500 bg-green-500/50 hover:bg-green-600/50 hover:text-black"
@@ -89,7 +72,7 @@ export default function TestAndRefineOverviewPage() {
 
       {/* Main Content */}
       <main className="container mx-auto px-4 py-8 space-y-8">
-        {showProgress && <ProgressSteps steps={steps} />}
+        {showProgressIndicator && <ProgressSteps steps={steps} />}
         
         <div className="max-w-6xl mx-auto space-y-8">
           <div>

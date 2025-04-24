@@ -7,6 +7,7 @@ import { ProgressSteps } from '@/components/progress-steps'
 import { Button } from '@/components/ui/button'
 import { Grid, Save } from 'lucide-react'
 import { UnifiedVoiceAgent } from '@/components/UnifiedVoiceAgent'
+import { NavigationBar } from '@/components/NavigationBar'
 
 const steps = [
   { number: 1, title: 'Choose a voice' },
@@ -27,13 +28,7 @@ export default function AnswerQuestionsPage() {
       {/* Header */}
       <header className="border-b border-white/10">
         <div className="container mx-auto px-4 h-16 flex items-center justify-between">
-          <Link
-            href="/load-files"
-            className="flex items-center gap-2 text-sm text-white/70 hover:text-white"
-          >
-            <Grid className="w-4 h-4" />
-            Back to files
-          </Link>
+          <NavigationBar />
           <Button variant="outline" className="gap-2 text-black border-green-500 bg-green-500/50 hover:bg-green-600/50 hover:text-black">
             <Save className="w-4 h-4" />
             Save changes

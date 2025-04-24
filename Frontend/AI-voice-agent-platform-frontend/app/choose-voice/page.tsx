@@ -9,6 +9,8 @@ import { Button } from '@/components/ui/button'
 import { Grid, Save } from 'lucide-react'
 import { useSaveChanges } from '@/hooks/use-save-changes'
 import { SaveChangesPopup } from '@/components/save-changes-popup'
+import { NavigationBar } from '@/components/NavigationBar'
+import { useProgressIndicator } from '@/hooks/use-progress-indicator'
 
 const steps = [
  { number: 1, title: 'Choose a voice', isActive: true },
@@ -36,6 +38,7 @@ const voices = [
 export default function ChooseVoicePage() {
  const router = useRouter()
  const searchParams = useSearchParams()
+ const { showProgressIndicator } = useProgressIndicator()
  const [assistantName, setAssistantName] = useState('')
  const [filter, setFilter] = useState<'all' | 'man' | 'woman'>('all')
  const [selectedVoice, setSelectedVoice] = useState(voices[0].name)
@@ -110,13 +113,7 @@ export default function ChooseVoicePage() {
      {/* Header */}
      <header className="border-b border-white/10">
        <div className="container mx-auto px-4 h-16 flex items-center justify-between">
-         <Link
-           href="/"
-           className="flex items-center gap-2 text-sm text-white/70 hover:text-white"
-         >
-           <Grid className="w-4 h-4" />
-           Back to dashboard
-         </Link>
+         <NavigationBar />
          <Button 
            variant="outline" 
            className="gap-2 text-black border-green-500 bg-green-500/50 hover:bg-green-600/50 hover:text-black"
@@ -140,7 +137,7 @@ export default function ChooseVoicePage() {
 
      {/* Main Content */}
      <main className="container mx-auto px-4 py-8 space-y-8">
-       <ProgressSteps steps={steps} />
+       {!showProgressIndicator ? null : <ProgressSteps steps={steps} />}
        
        <div className="max-w-4xl mx-auto space-y-4">
          <div>
