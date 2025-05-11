@@ -133,6 +133,7 @@ class RAGManager:
             # Retrieve relevant context for the user's message
             context = await self.retrieve_context(user_msg.content)
             if not context:
+                logger.info("No relevant context found for query: '%s'", user_msg.content[:50])
                 return False
                 
             # Insert the context as an assistant message before the user's message
@@ -140,6 +141,12 @@ class RAGManager:
                 text=f"Here is some relevant context that may help answer the user's question:\n\n{context}",
                 role="assistant",
             )
+            
+            # Debug message to show the RAG message content
+            print("\n----- RAG CONTEXT BEING ADDED -----")
+            print(f"USER QUERY: {user_msg.content[:100]}...")
+            print(f"RAG CONTEXT: {context}")
+            print("------------------------------------\n")
             
             # Replace the last message with RAG context, then add user message back
             chat_ctx.messages[-1] = rag_msg

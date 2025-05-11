@@ -1,1 +1,0 @@
-# bakalarka_prototyp

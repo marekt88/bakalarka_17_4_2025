@@ -891,7 +891,7 @@ async def create_landingpage_assistant_with_rag(ctx: JobContext):
     assistant.start(ctx.room)
 
     await asyncio.sleep(1)
-    await assistant.say("Hello, I'm Coral. Hexagonal structures frequently appear in nature, from snowflakes to honeycombs.", allow_interruptions=False)
+    await assistant.say("Hello, I'm Coral, I am your helpfull assistant", allow_interruptions=False)
     
     @ctx.room.on("message")
     def on_message(message):
